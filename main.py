@@ -112,7 +112,7 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
                     "https://api.groq.com/openai/v1/audio/transcriptions",
                     headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
                     files={"file": ("audio.mp3", f, "audio/mpeg")},
-                    data={"model": "whisper-large-v3-turbo", "language": "es"},
+                    data={"model": "whisper-large-v3-turbo"},  # Auto-detect language
                     timeout=60
                 )
 
@@ -125,6 +125,52 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
     finally:
         Path(temp_ogg_path).unlink(missing_ok=True)
         Path(temp_mp3_path).unlink(missing_ok=True)
+
+
+def detect_language(text: str) -> str:
+    """Detectar idioma del texto (es/en)"""
+    spanish_indicators = [
+        'hola', 'qué', 'cómo', 'gracias', 'por favor', 'necesito', 'quiero',
+        'buenos', 'buenas', 'está', 'dónde', 'cuánto', 'tengo', 'puedo',
+        'ayuda', 'información', 'servicio', 'precio', 'cuándo', 'porqué'
+    ]
+    text_lower = text.lower()
+    for word in spanish_indicators:
+        if word in text_lower:
+            return "es"
+    return "en"
+
+
+async def text_to_speech(text: str, language: str = "en") -> bytes | None:
+    """Convierte texto a audio usando Groq Orpheus (solo inglés)"""
+    if not GROQ_API_KEY:
+        return None
+
+    # Orpheus solo soporta inglés
+    if language == "es":
+        return None
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            "https://api.groq.com/openai/v1/audio/speech",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "playai-tts",
+                "input": text,
+                "voice": "Arista-PlayAI",
+                "response_format": "wav"
+            }
+        )
+
+        if response.status_code == 200:
+            logger.info(f"TTS generado: {len(response.content)} bytes")
+            return response.content
+        else:
+            logger.error(f"TTS error: {response.text}")
+            return None
 
 
 async def chat_completion(user_message: str, history: list = None) -> str:
@@ -279,6 +325,54 @@ async def send_whatsapp_message(to: str, text: str):
         return response
 
 
+async def send_whatsapp_audio(to: str, audio_data: bytes) -> bool:
+    """Enviar nota de voz por WhatsApp"""
+    upload_url = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/media"
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        # 1. Subir audio a Meta
+        response = await client.post(
+            upload_url,
+            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+            data={"messaging_product": "whatsapp", "type": "audio/wav"},
+            files={"file": ("audio.wav", audio_data, "audio/wav")}
+        )
+
+        if response.status_code != 200:
+            logger.error(f"Audio upload error: {response.text}")
+            return False
+
+        media_id = response.json().get("id")
+        if not media_id:
+            logger.error("No media_id in upload response")
+            return False
+
+        logger.info(f"Audio subido: media_id={media_id}")
+
+        # 2. Enviar mensaje con audio
+        send_response = await client.post(
+            WHATSAPP_API_URL,
+            headers={
+                "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": to,
+                "type": "audio",
+                "audio": {"id": media_id}
+            }
+        )
+
+        if send_response.status_code == 200:
+            logger.info(f"Nota de voz enviada a {to}")
+            return True
+        else:
+            logger.error(f"Audio send error: {send_response.text}")
+            return False
+
+
 async def download_media(media_id: str) -> bytes | None:
     """Descargar archivo multimedia de WhatsApp"""
     async with httpx.AsyncClient() as client:
@@ -339,17 +433,52 @@ async def process_message(phone: str, message: dict, message_type: str, message_
         if message_type == "text":
             user_text = message.get("text", {}).get("body", "")
         elif message_type == "audio":
+            # Procesar nota de voz con respuesta de voz (si es inglés)
             audio_id = message.get("audio", {}).get("id")
             if audio_id:
-                logger.info(f"Descargando audio {audio_id}")
+                logger.info(f"Procesando nota de voz {audio_id}")
                 audio_bytes = await download_media(audio_id)
                 if audio_bytes:
+                    # 1. Transcribir audio
                     user_text = await transcribe_audio(audio_bytes)
                     logger.info(f"Transcripción: {user_text[:100]}...")
+
+                    if not user_text or user_text.startswith("["):
+                        await send_whatsapp_message(phone, "No pude entender tu mensaje de voz. ¿Podrías repetirlo?")
+                        return
+
+                    # 2. Generar respuesta
+                    history = await get_conversation_history(phone)
+                    response = await chat_completion(user_text, history)
+                    logger.info(f"Respuesta: {response[:100]}...")
+
+                    # 3. Detectar idioma e intentar responder con voz
+                    language = detect_language(user_text)
+                    voice_sent = False
+
+                    if language == "en":
+                        # Intentar enviar respuesta de voz en inglés
+                        audio_response = await text_to_speech(response, language)
+                        if audio_response:
+                            voice_sent = await send_whatsapp_audio(phone, audio_response)
+
+                    # 4. Fallback a texto si TTS falla o es español
+                    if not voice_sent:
+                        if language == "es":
+                            response += "\n\n_(Respuesta de voz disponible solo en inglés)_"
+                        await send_whatsapp_message(phone, response)
+
+                    # 5. Guardar en historial
+                    history.append({"role": "user", "content": f"[Audio] {user_text}"})
+                    history.append({"role": "assistant", "content": response})
+                    await save_conversation(phone, history)
+                    return
                 else:
-                    user_text = "[Error descargando audio]"
+                    await send_whatsapp_message(phone, "No pude descargar tu mensaje de voz. ¿Podrías enviarlo de nuevo?")
+                    return
             else:
-                user_text = "[Audio sin ID]"
+                await send_whatsapp_message(phone, "No pude procesar tu mensaje de voz. ¿Podrías enviarlo de nuevo?")
+                return
         elif message_type == "image":
             # Procesar imagen con Groq Vision
             image_id = message.get("image", {}).get("id")
@@ -434,7 +563,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Loopera WhatsApp Bot",
     description="Bot de WhatsApp para Loopera - Railway Edition (Text + Audio + Vision)",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan
 )
 
@@ -445,8 +574,8 @@ async def root():
     return {
         "status": "online",
         "service": "Loopera WhatsApp Bot",
-        "version": "1.1.0",
-        "features": ["text", "audio", "vision"]
+        "version": "1.2.0",
+        "features": ["text", "audio", "vision", "tts-en"]
     }
 
 
