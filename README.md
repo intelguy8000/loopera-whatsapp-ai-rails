@@ -1,298 +1,223 @@
-# Loopera WhatsApp Bot - Railway Edition
-
-Bot de WhatsApp con IA para Loopera, optimizado para Railway.
-
----
-
-## Resultados del Experimento
-
-| Campo | Valor |
-|-------|-------|
-| **Fecha** | 1 Enero 2026 |
-| **Estado** | ✅ EXITOSO |
-| **URL Produccion** | https://web-production-5ad96.up.railway.app |
-
-### Conclusion
-
-**Railway funciona correctamente para WhatsApp bots.** El problema anterior era configuracion de Meta (webhook + suscripciones WABA), NO infraestructura de Railway.
-
-### Comparativa Railway vs Render
-
-| Aspecto | Railway | Render |
-|---------|---------|--------|
-| Deploy | ✅ Funciona | ✅ Funciona |
-| Health checks | ✅ /health | ✅ /health |
-| Puerto dinamico | $PORT | $PORT |
-| Cold starts | Por validar | Estable |
-| Logs | Tiempo real | Basicos |
-| Redis addon | Integrado | Externo |
-| Precio base | $5/mes | $7/mes |
-
-### Checklist de Deployment Verificado
-
-- [x] Health check respondiendo
-- [x] Webhook verificacion paso
-- [x] Mensajes llegando al bot
-- [x] Bot respondiendo correctamente
-- [x] Transcripcion de audio funcionando
-- [x] Redis conectado (opcional)
-
-### Lecciones Aprendidas
-
-1. **Railway NO tiene problemas de infraestructura** para este caso de uso
-2. **La clave es configurar correctamente Meta** (webhook + suscripciones)
-3. **El Shadow Delivery Problem sigue siendo el error #1** a verificar cuando los mensajes no llegan
-4. **Siempre ejecutar el POST a /subscribed_apps** despues de verificar el webhook
-
----
-
-## Stack
-
-- **Framework**: FastAPI + Uvicorn
-- **LLM**: Groq (Llama 3.3 70B)
-- **STT**: Groq Whisper (notas de voz)
-- **Cache**: Redis (opcional)
-- **Deploy**: Railway
-
-## Quick Start
-
-### 1. Deploy en Railway
-
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/...)
-
-O manual:
-
-```bash
-# Conectar repo a Railway
-railway link
-
-# Deploy
-railway up
-```
-
-### 2. Configurar Variables de Entorno
-
-En Railway Dashboard > Variables, agregar:
-
-| Variable | Descripcion | Ejemplo |
-|----------|-------------|---------|
-| `VERIFY_TOKEN` | Token para verificar webhook | `loopera-verify-2024` |
-| `WHATSAPP_TOKEN` | Token de WhatsApp Cloud API | `EAAG...` |
-| `APP_SECRET` | Secret de la app de Meta | `abc123...` |
-| `PHONE_NUMBER_ID` | **ID del numero** (NO es WABA ID) | `949507764911133` |
-| `GROQ_API_KEY` | API Key de Groq | `gsk_...` |
-| `REDIS_URL` | URL de Redis (opcional) | Railway lo provee automatico |
-
-> **IMPORTANTE**: `PHONE_NUMBER_ID` es el ID del numero de telefono, NO el WABA ID.
-> - WABA ID: `1282258597052951` (NO usar para enviar mensajes)
-> - Phone Number ID: `949507764911133` (USAR ESTE)
-
-### 3. Obtener Dominio de Railway
-
-1. Ve a Railway Dashboard > tu proyecto
-2. Click en el servicio web
-3. Settings > Networking > Generate Domain
-4. Copia el dominio: `tu-app.up.railway.app`
-
-### 4. Configurar Webhook en Meta Developers
-
-1. Ve a [Meta Developers](https://developers.facebook.com)
-2. Tu App > WhatsApp > Configuration
-3. Webhook:
-   - **Callback URL**: `https://tu-app.up.railway.app/webhook`
-   - **Verify Token**: El mismo que pusiste en `VERIFY_TOKEN`
-4. Click "Verify and Save"
-5. Suscribirse a: `messages`, `message_deliveries`, `message_reads`
-
----
-
-## CRITICO: Shadow Delivery Problem
-
-### El Problema
-
-Desde **Octubre 2025**, Meta tiene un bug donde la suscripcion WABA-to-App **no se crea automaticamente** al verificar el webhook.
-
-**Sintomas:**
-- Webhook verifica correctamente en Meta ✅
-- Health check funciona ✅
-- Envias mensaje de WhatsApp... y **nunca llega** ❌
-- Los logs de Railway no muestran ningun POST ❌
-
-### La Causa
-
-Meta tiene dos niveles de suscripcion:
-1. **App Webhook** - Se configura en Meta Developers (esto SI funciona)
-2. **WABA Subscription** - Conecta tu WABA especifico al webhook (esto NO se crea automatico)
-
-Sin el paso 2, los mensajes se pierden en el vacio.
-
-### La Solucion
-
-**Ejecutar este comando DESPUES de verificar el webhook:**
-
-```bash
-curl -X POST "https://graph.facebook.com/v21.0/1282258597052951/subscribed_apps" \
-  -H "Authorization: Bearer $WHATSAPP_TOKEN" \
-  -d "override_callback_uri=https://TU-APP.up.railway.app/webhook" \
-  -d "verify_token=TU_VERIFY_TOKEN"
-```
-
-Reemplazar:
-- `1282258597052951` -> Tu WABA ID
-- `TU-APP.up.railway.app` -> Tu dominio de Railway
-- `$WHATSAPP_TOKEN` -> Tu token de WhatsApp
-- `TU_VERIFY_TOKEN` -> Tu verify token
-
-**Respuesta exitosa:**
-```json
-{"success": true}
-```
-
-### Verificar que la Suscripcion Existe
-
-```bash
-curl -X GET "https://graph.facebook.com/v21.0/1282258597052951/subscribed_apps" \
-  -H "Authorization: Bearer $WHATSAPP_TOKEN"
-```
-
-**Respuesta correcta:**
-```json
-{
-  "data": [
-    {
-      "whatsapp_business_api_data": {
-        "id": "TU_APP_ID",
-        "link": "https://tu-app.up.railway.app/webhook",
-        "name": "Tu App Name"
-      }
-    }
-  ]
-}
-```
-
-**Si `data` esta vacio** -> La suscripcion no existe, ejecuta el comando POST.
-
----
-
-## Troubleshooting
-
-### Webhook no verifica
-
-```
-❌ Error: Verification failed
-```
-
-**Causas:**
-1. `VERIFY_TOKEN` no coincide entre Railway y Meta
-2. El endpoint `/webhook` no es accesible
-3. Railway aun no termino el deploy
-
-**Solucion:**
-```bash
-# Probar manualmente
-curl "https://tu-app.up.railway.app/webhook?hub.mode=subscribe&hub.verify_token=TU_TOKEN&hub.challenge=test123"
-
-# Debe responder: test123
-```
-
-### Mensajes no llegan
-
-```
-✅ Webhook verificado
-❌ Mensajes no aparecen en logs
-```
-
-**99% de las veces**: Falta la suscripcion WABA. Ver seccion "Shadow Delivery Problem".
-
-**Verificar:**
-```bash
-# Ver suscripciones actuales
-curl -X GET "https://graph.facebook.com/v21.0/1282258597052951/subscribed_apps" \
-  -H "Authorization: Bearer $WHATSAPP_TOKEN"
-```
-
-### Bot no responde
-
-```
-✅ Webhook recibe mensajes
-❌ No envia respuesta
-```
-
-**Causas:**
-1. `PHONE_NUMBER_ID` incorrecto (usaste WABA ID por error?)
-2. `WHATSAPP_TOKEN` expirado o invalido
-3. `GROQ_API_KEY` no configurado
-
-**Verificar Phone Number ID:**
-```bash
-# Debe retornar info del numero
-curl "https://graph.facebook.com/v21.0/949507764911133" \
-  -H "Authorization: Bearer $WHATSAPP_TOKEN"
-```
-
-### Audio no transcribe
-
-```
-✅ Mensaje de audio recibido
-❌ Error transcribiendo
-```
-
-**Causas:**
-1. `GROQ_API_KEY` no configurado
-2. FFmpeg no instalado (Railway lo incluye por defecto con Nixpacks)
-
-**Verificar Groq:**
-```bash
-curl "https://api.groq.com/openai/v1/models" \
-  -H "Authorization: Bearer $GROQ_API_KEY"
-```
-
-### Redis no conecta
-
-```
-⚠️ Redis no disponible: Connection refused
-```
-
-**No es critico** - El bot funciona sin Redis, solo pierde el historial de conversacion.
-
-**Para agregar Redis:**
-1. Railway Dashboard > New Service > Database > Redis
-2. La variable `REDIS_URL` se agrega automaticamente
-
----
+# Loopera WhatsApp AI Bot
+
+Bot de WhatsApp con IA que procesa texto, imagenes y notas de voz. Responde con voz cuando recibe notas de voz en ingles.
+
+## Features
+
+| Feature | Tecnologia | Status |
+|---------|------------|--------|
+| Texto -> Texto | Llama 3.3 70B | OK |
+| Voz -> Texto | Whisper + Llama | OK |
+| Voz (EN) -> Voz (EN) | PlayAI TTS + ffmpeg | OK |
+| Imagenes -> Texto | Llama 4 Scout Vision | OK |
+| Memoria conversacional | Redis (24h) | OK |
+| Multilingue | Deteccion automatica | OK |
 
 ## Arquitectura
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────┐
-│   WhatsApp      │────>│   Railway        │────>│   Groq      │
-│   Cloud API     │<────│   (FastAPI)      │<────│   LLM/STT   │
-└─────────────────┘     └──────────────────┘     └─────────────┘
-                               │
-                               v
-                        ┌─────────────┐
-                        │   Redis     │
-                        │  (opcional) │
-                        └─────────────┘
+Usuario -> WhatsApp -> Meta API -> Railway
+                                      |
+                                      v
+                              +---------------+
+                              |   Whisper     | (transcripcion)
+                              +---------------+
+                                      |
+                                      v
+                              +---------------+
+                              | Llama 3.3 70B | (respuesta)
+                              +---------------+
+                                      |
+                                      v
+                              +---------------+
+                              |  PlayAI TTS   | (genera voz)
+                              +---------------+
+                                      |
+                                      v
+                              +---------------+
+                              |    ffmpeg     | (WAV -> MP3)
+                              +---------------+
+                                      |
+                                      v
+                              WhatsApp -> Usuario
+```
+
+## Stack Tecnologico
+
+- **Runtime:** Python 3.11
+- **Framework:** FastAPI
+- **Hosting:** Railway (Docker)
+- **LLM:** Groq (Llama 3.3 70B Versatile)
+- **STT:** Groq Whisper Large v3 Turbo
+- **TTS:** Groq PlayAI TTS
+- **Vision:** Groq Llama 4 Scout
+- **Audio Processing:** ffmpeg
+- **Cache/Memory:** Redis
+- **API:** Meta WhatsApp Business API
+
+## Variables de Entorno
+
+| Variable | Descripcion | Ejemplo |
+|----------|-------------|---------|
+| `VERIFY_TOKEN` | Token para verificar webhook | `loopera_railway_2024` |
+| `WHATSAPP_TOKEN` | Token de acceso de Meta (System User) | `EAAG...` |
+| `APP_SECRET` | App Secret de Meta | `abc123...` |
+| `PHONE_NUMBER_ID` | ID del numero de WhatsApp (NO es WABA ID) | `949507764911133` |
+| `GROQ_API_KEY` | API Key de Groq | `gsk_...` |
+| `REDIS_URL` | URL de Redis (Railway lo provee automatico) | `redis://...` |
+
+> **IMPORTANTE:** `PHONE_NUMBER_ID` es el ID del numero, NO el WABA ID.
+> - WABA ID: `1282258597052951` (para suscripciones)
+> - Phone Number ID: `949507764911133` (para enviar mensajes)
+
+## Errores Comunes y Soluciones
+
+### 1. Shadow Delivery Problem
+
+**Problema:** Webhook verifica OK pero mensajes no llegan.
+
+**Causa:** Meta no crea automaticamente la suscripcion WABA-to-App desde Oct 2025.
+
+**Solucion:**
+```bash
+curl -X POST "https://graph.facebook.com/v21.0/1282258597052951/subscribed_apps" \
+  -H "Authorization: Bearer $WHATSAPP_TOKEN" \
+  -d "override_callback_uri=https://tu-app.railway.app/webhook" \
+  -d "verify_token=tu_verify_token"
+```
+
+**Verificar suscripcion:**
+```bash
+curl "https://graph.facebook.com/v21.0/1282258597052951/subscribed_apps" \
+  -H "Authorization: Bearer $WHATSAPP_TOKEN"
+```
+
+### 2. $PORT no se expande en Docker
+
+**Problema:** `Invalid value for '--port': '$PORT' is not a valid integer`
+
+**Causa:** Docker no expande variables de entorno en CMD cuando Railway usa Dockerfile.
+
+**Solucion:** Usar `python main.py` que lee PORT con `os.getenv()`:
+```python
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
+```
+
+### 3. Token de WhatsApp expira
+
+**Problema:** `Session has expired`
+
+**Solucion:** Crear System User en Meta Business Settings con token permanente:
+1. Meta Business Settings > System Users
+2. Crear nuevo System User
+3. Asignar permisos de WhatsApp
+4. Generar token (nunca expira)
+
+### 4. TTS requiere aceptar terminos
+
+**Problema:** `The model 'playai-tts' requires terms acceptance`
+
+**Solucion:** Visitar https://console.groq.com/playground?model=playai-tts y aceptar los terminos.
+
+### 5. WhatsApp no acepta WAV
+
+**Problema:** `Param file must be a file with one of the following types: audio/aac, audio/mp4...`
+
+**Solucion:** Convertir WAV a MP3 con ffmpeg antes de enviar (ya implementado en el bot).
+
+### 6. ffmpeg no encontrado
+
+**Problema:** `FileNotFoundError: [Errno 2] No such file or directory: 'ffmpeg'`
+
+**Solucion:** El Dockerfile ya incluye ffmpeg. Si usas Nixpacks, crear `nixpacks.toml`:
+```toml
+[phases.setup]
+nixPkgs = ["ffmpeg"]
+```
+
+## Estructura del Proyecto
+
+```
+loopera-whatsapp-ai-rails/
+├── main.py              # App principal FastAPI (700+ lineas)
+├── Dockerfile           # Imagen con Python 3.11 + ffmpeg
+├── requirements.txt     # Dependencias Python
+├── .env.example         # Variables de entorno ejemplo
+├── .gitignore           # Archivos ignorados
+└── README.md            # Esta documentacion
+```
+
+## Configuracion Meta WhatsApp
+
+1. Crear App en [Meta Developers](https://developers.facebook.com)
+2. Agregar producto WhatsApp
+3. Configurar Webhook:
+   - URL: `https://tu-app.railway.app/webhook`
+   - Verify Token: mismo que `VERIFY_TOKEN`
+4. Suscribirse a campo `messages`
+5. **CRITICO:** Ejecutar POST a `/subscribed_apps` (Shadow Delivery Problem)
+6. Crear System User para token permanente
+
+## Deploy en Railway
+
+1. Fork/clone este repo
+2. Crear proyecto en [Railway](https://railway.app)
+3. Conectar repo de GitHub
+4. Agregar Redis addon (opcional, para memoria)
+5. Configurar variables de entorno:
+   - `VERIFY_TOKEN`
+   - `WHATSAPP_TOKEN`
+   - `APP_SECRET`
+   - `PHONE_NUMBER_ID`
+   - `GROQ_API_KEY`
+6. Deploy automatico
+
+## Limites de Groq (Free Tier)
+
+| Modelo | RPM | TPD |
+|--------|-----|-----|
+| Llama 3.3 70B | 30 | 100K |
+| Whisper Turbo | 20 | 2,000 |
+| PlayAI TTS | 30 | 100K |
+| Llama 4 Scout | 30 | 500K |
+
+RPM = Requests Per Minute
+TPD = Tokens Per Day
+
+## Flujo de Mensajes
+
+### Texto
+```
+Usuario envia texto -> Llama genera respuesta -> Envia texto
+```
+
+### Nota de voz (Ingles)
+```
+Usuario envia voz -> Whisper transcribe -> Llama responde
+-> PlayAI TTS -> ffmpeg (WAV->MP3) -> Envia nota de voz
+```
+
+### Nota de voz (Espanol)
+```
+Usuario envia voz -> Whisper transcribe -> Llama responde
+-> Envia texto (TTS no soporta ES)
+```
+
+### Imagen
+```
+Usuario envia imagen -> Llama 4 Scout analiza -> Envia texto
 ```
 
 ## Endpoints
 
 | Metodo | Ruta | Descripcion |
 |--------|------|-------------|
-| GET | `/` | Health check (status: online) |
-| GET | `/health` | Health check para Railway |
+| GET | `/` | Health check con features |
+| GET | `/health` | Health check simple |
 | GET | `/webhook` | Verificacion de Meta |
 | POST | `/webhook` | Recepcion de mensajes |
-
-## IDs del Proyecto
-
-| Tipo | ID | Uso |
-|------|----|----|
-| WABA ID | `1282258597052951` | Suscripciones, config |
-| Phone Number ID | `949507764911133` | Enviar mensajes |
-
----
 
 ## Desarrollo Local
 
@@ -301,24 +226,26 @@ curl "https://api.groq.com/openai/v1/models" \
 git clone https://github.com/intelguy8000/loopera-whatsapp-ai-rails
 cd loopera-whatsapp-ai-rails
 
-# Crear .env
-cp .env.example .env
-# Editar .env con tus valores
+# Crear entorno virtual
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# o: venv\Scripts\activate  # Windows
 
 # Instalar dependencias
 pip install -r requirements.txt
 
+# Configurar variables
+cp .env.example .env
+# Editar .env con tus valores
+
 # Ejecutar
 python main.py
 
-# O con uvicorn
-uvicorn main:app --reload --port 8000
+# El bot estara en http://localhost:8000
 ```
 
-Para probar localmente con WhatsApp necesitas un tunel (ngrok, cloudflared).
-
----
+Para probar con WhatsApp necesitas un tunel publico (ngrok, cloudflared).
 
 ## Licencia
 
-Proyecto interno de Loopera.
+MIT - Loopera 2026
