@@ -141,36 +141,80 @@ def detect_language(text: str) -> str:
     return "en"
 
 
+def convert_wav_to_mp3(wav_data: bytes) -> bytes | None:
+    """Convierte WAV a MP3 usando ffmpeg"""
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as wav_file:
+            wav_file.write(wav_data)
+            wav_path = wav_file.name
+
+        mp3_path = wav_path.replace('.wav', '.mp3')
+
+        # Convertir con ffmpeg
+        result = subprocess.run([
+            'ffmpeg', '-i', wav_path, '-acodec', 'libmp3lame', '-y', mp3_path
+        ], capture_output=True)
+
+        if result.returncode != 0:
+            logger.error(f"FFmpeg error: {result.stderr.decode()}")
+            return None
+
+        with open(mp3_path, 'rb') as mp3_file:
+            mp3_data = mp3_file.read()
+
+        # Limpiar archivos temporales
+        Path(wav_path).unlink(missing_ok=True)
+        Path(mp3_path).unlink(missing_ok=True)
+
+        return mp3_data
+    except Exception as e:
+        logger.error(f"Error convirtiendo audio: {e}")
+        return None
+
+
 async def text_to_speech(text: str, language: str = "en") -> bytes | None:
-    """Convierte texto a audio usando Groq Orpheus (solo inglés)"""
+    """Convierte texto a audio usando Groq PlayAI TTS (solo inglés)"""
     if not GROQ_API_KEY:
         return None
 
-    # Orpheus solo soporta inglés
+    # PlayAI TTS solo soporta inglés
     if language == "es":
         return None
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            "https://api.groq.com/openai/v1/audio/speech",
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "playai-tts",
-                "input": text,
-                "voice": "Arista-PlayAI",
-                "response_format": "wav"
-            }
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/audio/speech",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "playai-tts",
+                    "input": text,
+                    "voice": "Arista-PlayAI",
+                    "response_format": "wav"
+                }
+            )
 
-        if response.status_code == 200:
-            logger.info(f"TTS generado: {len(response.content)} bytes")
-            return response.content
-        else:
-            logger.error(f"TTS error: {response.text}")
-            return None
+            if response.status_code == 200:
+                wav_data = response.content
+                logger.info(f"TTS generado: {len(wav_data)} bytes WAV")
+
+                # Convertir a MP3 para WhatsApp
+                mp3_data = convert_wav_to_mp3(wav_data)
+                if mp3_data:
+                    logger.info(f"Convertido a MP3: {len(mp3_data)} bytes")
+                    return mp3_data
+                else:
+                    logger.error("Falló conversión WAV->MP3")
+                    return None
+            else:
+                logger.error(f"TTS error: {response.text}")
+                return None
+    except Exception as e:
+        logger.error(f"TTS exception: {e}")
+        return None
 
 
 async def chat_completion(user_message: str, history: list = None) -> str:
@@ -334,8 +378,8 @@ async def send_whatsapp_audio(to: str, audio_data: bytes) -> bool:
         response = await client.post(
             upload_url,
             headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
-            data={"messaging_product": "whatsapp", "type": "audio/wav"},
-            files={"file": ("audio.wav", audio_data, "audio/wav")}
+            data={"messaging_product": "whatsapp", "type": "audio/mpeg"},
+            files={"file": ("audio.mp3", audio_data, "audio/mpeg")}
         )
 
         if response.status_code != 200:
