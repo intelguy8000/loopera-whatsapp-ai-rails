@@ -9,4 +9,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# No CMD - Railway usará el Procfile
+# No CMD - Railway usará startCommand de railway.json
