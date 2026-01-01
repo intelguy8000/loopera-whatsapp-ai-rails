@@ -1,6 +1,32 @@
 """
 Loopera WhatsApp Bot - Railway Edition
-Webhook handler para WhatsApp Cloud API con soporte Groq (LLM + Whisper + Vision)
+=========================================
+
+Bot de WhatsApp con IA que procesa:
+- Texto -> Texto (Llama 3.3 70B)
+- Voz -> Voz EN (Whisper + Llama + PlayAI TTS)
+- Voz -> Voz ES (Whisper + Llama + Google TTS)
+- Imagen -> Texto (Llama 4 Scout Vision)
+
+Stack:
+- Framework: FastAPI
+- LLM: Groq (llama-3.3-70b-versatile)
+- STT: Groq Whisper Large v3 Turbo
+- TTS EN: Groq PlayAI TTS (genera WAV, convertir a MP3)
+- TTS ES: Google Cloud TTS (es-US-Wavenet-B, latino)
+- Vision: Groq Llama 4 Scout
+- Memory: Redis (24h TTL, 20 mensajes)
+
+Deployment:
+- Railway con Dockerfile
+- Puerto: leido con os.getenv("PORT") porque Docker no expande $PORT
+
+Documentacion:
+- README.md: Guia general
+- TROUBLESHOOTING.md: Errores y soluciones
+- .env.example: Variables de entorno
+
+Autor: Loopera 2026
 """
 import os
 import hmac
@@ -27,20 +53,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# CONFIGURACIÓN
+# CONFIGURACION
 # =============================================================================
+# Variables de entorno - ver .env.example para documentacion completa
+# IMPORTANTE: PHONE_NUMBER_ID != WABA_ID (error comun)
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "loopera-verify-2024")
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
-APP_SECRET = os.getenv("APP_SECRET", "")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "949507764911133")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-REDIS_URL = os.getenv("REDIS_URL", "")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")  # System User token (permanente)
+APP_SECRET = os.getenv("APP_SECRET", "")  # Para validar firmas de webhook
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "949507764911133")  # NO es WABA ID
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # console.groq.com
+REDIS_URL = os.getenv("REDIS_URL", "")  # Railway lo provee automatico
 
+# URL para enviar mensajes - usa Phone Number ID, no WABA ID
 WHATSAPP_API_URL = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
 
-# Cargar credenciales de Google Cloud desde variable de entorno
+
 def get_google_tts_client():
+    """
+    Carga cliente de Google TTS desde variable de entorno.
+    El JSON de Service Account se pasa como string en GOOGLE_APPLICATION_CREDENTIALS_JSON.
+    Esto evita montar archivos en el container.
+    """
     credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
     if credentials_json:
         credentials_dict = json.loads(credentials_json)
@@ -93,9 +127,17 @@ async def save_conversation(phone: str, history: list):
 # =============================================================================
 # GROQ SERVICE
 # =============================================================================
+# Servicios de IA usando Groq API (console.groq.com)
+# - Whisper: Transcripcion de audio (soporta OGG de WhatsApp)
+# - Llama 3.3 70B: Chat principal
+# - PlayAI TTS: Text-to-speech en ingles (genera WAV)
+# - Llama 4 Scout: Vision/analisis de imagenes
 
 async def transcribe_audio(audio_bytes: bytes) -> str:
-    """Transcribir audio usando Groq Whisper"""
+    """
+    Transcribir audio usando Groq Whisper.
+    WhatsApp envia OGG, lo convertimos a MP3 para mejor compatibilidad.
+    """
     if not GROQ_API_KEY:
         return "[Audio recibido - Groq no configurado]"
 
@@ -151,7 +193,11 @@ def detect_language(text: str) -> str:
 
 
 def convert_wav_to_mp3(wav_data: bytes) -> bytes | None:
-    """Convierte WAV a MP3 usando ffmpeg"""
+    """
+    Convierte WAV a MP3 usando ffmpeg.
+    Necesario porque PlayAI TTS genera WAV pero WhatsApp no lo acepta.
+    WhatsApp acepta: AAC, MP3, OGG, OPUS, AMR
+    """
     try:
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as wav_file:
             wav_file.write(wav_data)
@@ -182,11 +228,17 @@ def convert_wav_to_mp3(wav_data: bytes) -> bytes | None:
 
 
 async def text_to_speech(text: str, language: str = "en") -> bytes | None:
-    """Convierte texto a audio usando Groq PlayAI TTS (solo inglés)"""
+    """
+    Text-to-Speech usando Groq PlayAI TTS (solo ingles).
+    Genera WAV que luego se convierte a MP3 para WhatsApp.
+    Para espanol, usar google_text_to_speech().
+
+    NOTA: Requiere aceptar terminos en console.groq.com/playground?model=playai-tts
+    """
     if not GROQ_API_KEY:
         return None
 
-    # PlayAI TTS solo soporta inglés
+    # PlayAI TTS solo soporta ingles
     if language == "es":
         return None
 
@@ -227,7 +279,17 @@ async def text_to_speech(text: str, language: str = "en") -> bytes | None:
 
 
 async def google_text_to_speech(text: str, language: str = "es") -> bytes:
-    """Convierte texto a audio usando Google Cloud TTS (soporta español)"""
+    """
+    Text-to-Speech usando Google Cloud TTS.
+    Soporta espanol latino (es-US) e ingles (en-US).
+    Genera MP3 directamente (no necesita conversion como PlayAI).
+
+    Voces configuradas:
+    - Espanol: es-US-Wavenet-B (femenina, latina)
+    - Ingles: en-US-Wavenet-F (femenina)
+
+    Requiere GOOGLE_APPLICATION_CREDENTIALS_JSON en variables de entorno.
+    """
     try:
         client = get_google_tts_client()
         if not client:
@@ -387,9 +449,14 @@ Cuando el usuario envía una imagen, analízala en contexto de servicios de auto
 # =============================================================================
 # WHATSAPP SERVICE
 # =============================================================================
+# Funciones para interactuar con Meta WhatsApp Cloud API v21.0
+# Documentacion: https://developers.facebook.com/docs/whatsapp/cloud-api/
+#
+# IMPORTANTE: Usar PHONE_NUMBER_ID (no WABA_ID) para enviar mensajes
+# Si obtienes "Object does not exist", verificar que usas el ID correcto
 
 async def send_whatsapp_message(to: str, text: str):
-    """Enviar mensaje de WhatsApp"""
+    """Enviar mensaje de texto por WhatsApp"""
     async with httpx.AsyncClient() as client:
         response = await client.post(
             WHATSAPP_API_URL,
@@ -747,9 +814,13 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 # =============================================================================
 # MAIN
 # =============================================================================
+# IMPORTANTE: Usamos os.getenv("PORT") porque Docker no expande $PORT
+# en la directiva CMD. Railway inyecta PORT en runtime.
+# Por eso Dockerfile usa: CMD ["python", "main.py"]
+# Ver TROUBLESHOOTING.md seccion "$PORT no se expande en Docker"
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8000))  # Railway inyecta PORT
     logger.info(f"Iniciando en puerto {port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
