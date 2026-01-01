@@ -11,3 +11,6 @@ redis==5.2.1
 
 # Variables de entorno
 python-dotenv==1.0.1
+
+# Google Cloud TTS (para español)
+google-cloud-texttospeech

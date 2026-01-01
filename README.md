@@ -1,6 +1,6 @@
 # Loopera WhatsApp AI Bot
 
-Bot de WhatsApp con IA que procesa texto, imagenes y notas de voz. Responde con voz cuando recibe notas de voz en ingles.
+Bot de WhatsApp con IA que procesa texto, imagenes y notas de voz. Responde con voz en ingles (PlayAI) y espanol (Google Cloud TTS).
 
 ## Features
 
@@ -9,6 +9,7 @@ Bot de WhatsApp con IA que procesa texto, imagenes y notas de voz. Responde con 
 | Texto -> Texto | Llama 3.3 70B | OK |
 | Voz -> Texto | Whisper + Llama | OK |
 | Voz (EN) -> Voz (EN) | PlayAI TTS + ffmpeg | OK |
+| Voz (ES) -> Voz (ES) | Google Cloud TTS | OK |
 | Imagenes -> Texto | Llama 4 Scout Vision | OK |
 | Memoria conversacional | Redis (24h) | OK |
 | Multilingue | Deteccion automatica | OK |
@@ -28,15 +29,23 @@ Usuario -> WhatsApp -> Meta API -> Railway
                               | Llama 3.3 70B | (respuesta)
                               +---------------+
                                       |
-                                      v
-                              +---------------+
-                              |  PlayAI TTS   | (genera voz)
-                              +---------------+
-                                      |
-                                      v
-                              +---------------+
-                              |    ffmpeg     | (WAV -> MP3)
-                              +---------------+
+                              +-------+-------+
+                              |               |
+                         (English)       (Spanish)
+                              |               |
+                              v               v
+                       +----------+    +------------+
+                       | PlayAI   |    | Google TTS |
+                       | TTS      |    | (es-US)    |
+                       +----------+    +------------+
+                              |               |
+                              v               |
+                       +----------+           |
+                       |  ffmpeg  |           |
+                       | WAV->MP3 |           |
+                       +----------+           |
+                              |               |
+                              +-------+-------+
                                       |
                                       v
                               WhatsApp -> Usuario
@@ -49,7 +58,8 @@ Usuario -> WhatsApp -> Meta API -> Railway
 - **Hosting:** Railway (Docker)
 - **LLM:** Groq (Llama 3.3 70B Versatile)
 - **STT:** Groq Whisper Large v3 Turbo
-- **TTS:** Groq PlayAI TTS
+- **TTS EN:** Groq PlayAI TTS
+- **TTS ES:** Google Cloud Text-to-Speech
 - **Vision:** Groq Llama 4 Scout
 - **Audio Processing:** ffmpeg
 - **Cache/Memory:** Redis
@@ -64,6 +74,7 @@ Usuario -> WhatsApp -> Meta API -> Railway
 | `APP_SECRET` | App Secret de Meta | `abc123...` |
 | `PHONE_NUMBER_ID` | ID del numero de WhatsApp (NO es WABA ID) | `949507764911133` |
 | `GROQ_API_KEY` | API Key de Groq | `gsk_...` |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Service Account JSON (para TTS español) | `{"type":"service_account",...}` |
 | `REDIS_URL` | URL de Redis (Railway lo provee automatico) | `redis://...` |
 
 > **IMPORTANTE:** `PHONE_NUMBER_ID` es el ID del numero, NO el WABA ID.
@@ -172,6 +183,7 @@ loopera-whatsapp-ai-rails/
    - `APP_SECRET`
    - `PHONE_NUMBER_ID`
    - `GROQ_API_KEY`
+   - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (opcional, para TTS español)
 6. Deploy automatico
 
 ## Limites de Groq (Free Tier)
@@ -202,7 +214,7 @@ Usuario envia voz -> Whisper transcribe -> Llama responde
 ### Nota de voz (Espanol)
 ```
 Usuario envia voz -> Whisper transcribe -> Llama responde
--> Envia texto (TTS no soporta ES)
+-> Google Cloud TTS (MP3 directo) -> Envia nota de voz
 ```
 
 ### Imagen

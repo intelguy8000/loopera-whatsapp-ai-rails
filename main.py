@@ -9,10 +9,13 @@ import logging
 import tempfile
 import subprocess
 import base64
+import json
 from pathlib import Path
 from contextlib import asynccontextmanager
 
 import httpx
+from google.cloud import texttospeech
+from google.oauth2 import service_account
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 
@@ -35,6 +38,15 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 REDIS_URL = os.getenv("REDIS_URL", "")
 
 WHATSAPP_API_URL = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
+
+# Cargar credenciales de Google Cloud desde variable de entorno
+def get_google_tts_client():
+    credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    if credentials_json:
+        credentials_dict = json.loads(credentials_json)
+        credentials = service_account.Credentials.from_service_account_info(credentials_dict)
+        return texttospeech.TextToSpeechClient(credentials=credentials)
+    return None
 
 # =============================================================================
 # REDIS (OPCIONAL)
@@ -214,6 +226,51 @@ async def text_to_speech(text: str, language: str = "en") -> bytes | None:
                 return None
     except Exception as e:
         logger.error(f"TTS exception: {e}")
+        return None
+
+
+async def google_text_to_speech(text: str, language: str = "es") -> bytes:
+    """Convierte texto a audio usando Google Cloud TTS (soporta español)"""
+    try:
+        client = get_google_tts_client()
+        if not client:
+            logger.error("Google TTS client not configured")
+            return None
+
+        # Configurar el input
+        synthesis_input = texttospeech.SynthesisInput(text=text)
+
+        # Seleccionar voz según idioma
+        if language == "es":
+            voice = texttospeech.VoiceSelectionParams(
+                language_code="es-US",  # Español latino
+                name="es-US-Wavenet-B",  # Voz femenina natural
+                ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
+            )
+        else:
+            voice = texttospeech.VoiceSelectionParams(
+                language_code="en-US",
+                name="en-US-Wavenet-F",
+                ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
+            )
+
+        # Configurar audio output (MP3 directo, no necesita conversión)
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
+
+        # Generar audio
+        response = client.synthesize_speech(
+            input=synthesis_input,
+            voice=voice,
+            audio_config=audio_config
+        )
+
+        logger.info(f"🎵 Google TTS generado: {len(response.audio_content)} bytes")
+        return response.audio_content
+
+    except Exception as e:
+        logger.error(f"Google TTS error: {e}")
         return None
 
 
@@ -496,20 +553,29 @@ async def process_message(phone: str, message: dict, message_type: str, message_
                     response = await chat_completion(user_text, history)
                     logger.info(f"Respuesta: {response[:100]}...")
 
-                    # 3. Detectar idioma e intentar responder con voz
+                    # 3. Detectar idioma y generar respuesta de voz
                     language = detect_language(user_text)
-                    voice_sent = False
+                    logger.info(f"🌐 Idioma detectado: {language}")
 
-                    if language == "en":
-                        # Intentar enviar respuesta de voz en inglés
-                        audio_response = await text_to_speech(response, language)
-                        if audio_response:
-                            voice_sent = await send_whatsapp_audio(phone, audio_response)
+                    audio_response = None
 
-                    # 4. Fallback a texto si TTS falla o es español
-                    if not voice_sent:
-                        if language == "es":
-                            response += "\n\n_(Respuesta de voz disponible solo en inglés)_"
+                    if language == "es":
+                        # Usar Google TTS para español
+                        logger.info("🔊 Generando respuesta de voz en español (Google TTS)...")
+                        audio_response = await google_text_to_speech(response, "es")
+                    else:
+                        # Usar PlayAI TTS para inglés
+                        logger.info("🔊 Generando respuesta de voz en inglés (PlayAI TTS)...")
+                        audio_response = await text_to_speech(response)
+
+                    # 4. Enviar audio si se generó correctamente
+                    if audio_response:
+                        success = await send_whatsapp_audio(phone, audio_response)
+                        if not success:
+                            logger.warning("Falló envío de audio, enviando texto...")
+                            await send_whatsapp_message(phone, response)
+                    else:
+                        # Fallback a texto
                         await send_whatsapp_message(phone, response)
 
                     # 5. Guardar en historial
@@ -606,8 +672,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Loopera WhatsApp Bot",
-    description="Bot de WhatsApp para Loopera - Railway Edition (Text + Audio + Vision)",
-    version="1.2.0",
+    description="Bot de WhatsApp para Loopera - Railway Edition (Text + Audio + Vision + TTS ES/EN)",
+    version="1.3.0",
     lifespan=lifespan
 )
 
@@ -618,8 +684,9 @@ async def root():
     return {
         "status": "online",
         "service": "Loopera WhatsApp Bot",
-        "version": "1.2.0",
-        "features": ["text", "audio", "vision", "tts-en"]
+        "version": "1.3.0",
+        "features": ["text", "audio", "vision"],
+        "tts": ["playai-en", "google-es"]
     }
 
 
