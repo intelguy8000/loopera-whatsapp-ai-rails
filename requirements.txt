@@ -1,0 +1,13 @@
+# FastAPI + Server
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.18
+
+# HTTP Client
+httpx==0.28.1
+
+# Redis (opcional, para persistencia de sesiones)
+redis==5.2.1
+
+# Variables de entorno
+python-dotenv==1.0.1
