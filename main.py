@@ -1,6 +1,6 @@
 """
 Loopera WhatsApp Bot - Railway Edition
-Webhook handler para WhatsApp Cloud API con soporte Groq (LLM + Whisper)
+Webhook handler para WhatsApp Cloud API con soporte Groq (LLM + Whisper + Vision)
 """
 import os
 import hmac
@@ -8,6 +8,7 @@ import hashlib
 import logging
 import tempfile
 import subprocess
+import base64
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -171,6 +172,68 @@ REGLAS:
             logger.error(f"Groq LLM error: {response.text}")
             return "Disculpa, tuve un problema. ¿Podrías repetir?"
 
+
+async def analyze_image(image_base64: str, media_type: str, caption: str, history: list = None) -> str:
+    """Analizar imagen usando Groq Llama Vision"""
+    if not GROQ_API_KEY:
+        return "No puedo analizar imágenes sin GROQ_API_KEY configurado."
+
+    system_prompt = """Eres el asistente virtual de Loopera, especializado en desarrollo de Agentes AI para empresas.
+
+Cuando el usuario envía una imagen:
+- Analízala detalladamente
+- Si es un documento o captura de pantalla, extrae la información relevante
+- Responde en el contexto de automatización y servicios de Loopera cuando sea apropiado
+- Sé profesional, conciso y usa español natural
+
+SOBRE LOOPERA:
+- Consultora especializada en agentes AI y automatización
+- Desarrollamos bots inteligentes de WhatsApp para empresas"""
+
+    # Construir mensajes con historial
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Agregar últimos 6 mensajes de historial para contexto
+    if history:
+        messages.extend(history[-6:])
+
+    # Agregar mensaje con imagen
+    user_content = [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{media_type};base64,{image_base64}"
+            }
+        },
+        {
+            "type": "text",
+            "text": caption if caption else "¿Qué ves en esta imagen? Descríbela detalladamente."
+        }
+    ]
+    messages.append({"role": "user", "content": user_content})
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.2-90b-vision-preview",
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 500
+            }
+        )
+
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
+        else:
+            logger.error(f"Groq Vision error: {response.text}")
+            return "No pude analizar la imagen. ¿Podrías enviarla de nuevo?"
+
+
 # =============================================================================
 # WHATSAPP SERVICE
 # =============================================================================
@@ -274,7 +337,40 @@ async def process_message(phone: str, message: dict, message_type: str, message_
             else:
                 user_text = "[Audio sin ID]"
         elif message_type == "image":
-            user_text = message.get("image", {}).get("caption", "[Imagen recibida]")
+            # Procesar imagen con Groq Vision
+            image_id = message.get("image", {}).get("id")
+            caption = message.get("image", {}).get("caption", "")
+            mime_type = message.get("image", {}).get("mime_type", "image/jpeg")
+
+            if image_id:
+                logger.info(f"Procesando imagen {image_id}")
+                image_bytes = await download_media(image_id)
+                if image_bytes:
+                    # Convertir a base64
+                    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+                    logger.info(f"Imagen descargada: {len(image_bytes)} bytes, tipo: {mime_type}")
+
+                    # Obtener historial y analizar imagen
+                    history = await get_conversation_history(phone)
+                    response = await analyze_image(image_base64, mime_type, caption, history)
+
+                    logger.info(f"Respuesta Vision: {response[:100]}...")
+
+                    # Enviar respuesta
+                    await send_whatsapp_message(phone, response)
+
+                    # Guardar en historial (texto descriptivo para la imagen)
+                    user_text_for_history = f"[Imagen enviada]{': ' + caption if caption else ''}"
+                    history.append({"role": "user", "content": user_text_for_history})
+                    history.append({"role": "assistant", "content": response})
+                    await save_conversation(phone, history)
+                    return
+                else:
+                    await send_whatsapp_message(phone, "No pude descargar la imagen. ¿Podrías enviarla de nuevo?")
+                    return
+            else:
+                await send_whatsapp_message(phone, "No pude procesar la imagen. ¿Podrías enviarla de nuevo?")
+                return
         else:
             user_text = f"[{message_type} recibido]"
 
@@ -316,14 +412,15 @@ async def lifespan(app: FastAPI):
     await init_redis()
     logger.info(f"Phone Number ID: {PHONE_NUMBER_ID}")
     logger.info(f"Groq configurado: {'Si' if GROQ_API_KEY else 'No'}")
+    logger.info(f"Vision habilitado: {'Si' if GROQ_API_KEY else 'No'}")
     yield
     logger.info("Cerrando bot...")
 
 
 app = FastAPI(
     title="Loopera WhatsApp Bot",
-    description="Bot de WhatsApp para Loopera - Railway Edition",
-    version="1.0.0",
+    description="Bot de WhatsApp para Loopera - Railway Edition (Text + Audio + Vision)",
+    version="1.1.0",
     lifespan=lifespan
 )
 
@@ -334,7 +431,8 @@ async def root():
     return {
         "status": "online",
         "service": "Loopera WhatsApp Bot",
-        "version": "1.0.0"
+        "version": "1.1.0",
+        "features": ["text", "audio", "vision"]
     }
 
 
