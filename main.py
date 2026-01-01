@@ -140,17 +140,14 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
 
 
 def detect_language(text: str) -> str:
-    """Detectar idioma del texto (es/en)"""
-    spanish_indicators = [
-        'hola', 'qué', 'cómo', 'gracias', 'por favor', 'necesito', 'quiero',
-        'buenos', 'buenas', 'está', 'dónde', 'cuánto', 'tengo', 'puedo',
-        'ayuda', 'información', 'servicio', 'precio', 'cuándo', 'porqué'
-    ]
+    """Detecta si el texto es español o inglés"""
+    spanish_words = ['hola', 'qué', 'cómo', 'gracias', 'por favor', 'necesito',
+                     'quiero', 'buenos', 'buenas', 'está', 'dónde', 'cuándo',
+                     'cuánto', 'puede', 'tienen', 'hacer', 'ayuda', 'información',
+                     'servicio', 'precio', 'cuenta', 'bien', 'mucho', 'para']
     text_lower = text.lower()
-    for word in spanish_indicators:
-        if word in text_lower:
-            return "es"
-    return "en"
+    spanish_count = sum(1 for word in spanish_words if word in text_lower)
+    return "es" if spanish_count >= 1 else "en"
 
 
 def convert_wav_to_mp3(wav_data: bytes) -> bytes | None:
@@ -279,23 +276,19 @@ async def chat_completion(user_message: str, history: list = None) -> str:
     if not GROQ_API_KEY:
         return "Bot configurado. Falta GROQ_API_KEY para respuestas inteligentes."
 
-    system_prompt = """You are Loopera's virtual assistant, specialized in AI automation for businesses.
+    system_prompt = """Eres el asistente virtual de Loopera, especializado en automatización con IA para negocios.
 
-LANGUAGE RULES:
-- ALWAYS detect and respond in the SAME language the user writes
-- Spanish → respond in Spanish
-- English → respond in English
-- Portuguese → respond in Portuguese
-- French → respond in French
-- Any other language → respond in that same language
+REGLAS DE IDIOMA:
+- Si el usuario escribe en ESPAÑOL → responde en ESPAÑOL
+- Si el usuario escribe en INGLÉS → responde en INGLÉS
+- Solo estos dos idiomas, nada más
 
-BUSINESS RULES:
-1. ONLY answer about: Loopera services, automation, WhatsApp bots, AI for business
-2. Out of scope: "I can only help you with automation topics." (in user's language)
-3. NEVER discuss: politics, sports, news, general knowledge
-4. If unsure: "Let me connect you with a human advisor." (in user's language)
-5. Always identify as Loopera's virtual assistant
-6. Keep responses concise (max 3 sentences)"""
+REGLAS DE NEGOCIO:
+1. Solo responde sobre: servicios de Loopera, automatización, bots de WhatsApp, IA para negocios
+2. Si preguntan algo fuera de tema: "Solo puedo ayudarte con temas de automatización."
+3. Siempre identifícate como asistente virtual de Loopera
+4. Respuestas concisas (máximo 3 oraciones)
+5. Tono profesional pero amigable"""
 
     messages = [{"role": "system", "content": system_prompt}]
     if history:
@@ -330,26 +323,22 @@ async def analyze_image(image_base64: str, media_type: str, caption: str, histor
     if not GROQ_API_KEY:
         return "No puedo analizar imágenes sin GROQ_API_KEY configurado."
 
-    system_prompt = """You are Loopera's virtual assistant, specialized in AI automation for businesses.
+    system_prompt = """Eres el asistente virtual de Loopera, especializado en automatización con IA para negocios.
 
-LANGUAGE RULES:
-- ALWAYS detect and respond in the SAME language the user writes
-- Spanish → respond in Spanish
-- English → respond in English
-- Portuguese → respond in Portuguese
-- French → respond in French
-- Any other language → respond in that same language
+REGLAS DE IDIOMA:
+- Si el usuario escribe en ESPAÑOL → responde en ESPAÑOL
+- Si el usuario escribe en INGLÉS → responde en INGLÉS
+- Solo estos dos idiomas, nada más
 
-BUSINESS RULES:
-1. ONLY answer about: Loopera services, automation, WhatsApp bots, AI for business
-2. Out of scope: "I can only help you with automation topics." (in user's language)
-3. NEVER discuss: politics, sports, news, general knowledge
-4. If unsure: "Let me connect you with a human advisor." (in user's language)
-5. Always identify as Loopera's virtual assistant
-6. Keep responses concise (max 3 sentences)
+REGLAS DE NEGOCIO:
+1. Solo responde sobre: servicios de Loopera, automatización, bots de WhatsApp, IA para negocios
+2. Si preguntan algo fuera de tema: "Solo puedo ayudarte con temas de automatización."
+3. Siempre identifícate como asistente virtual de Loopera
+4. Respuestas concisas (máximo 3 oraciones)
+5. Tono profesional pero amigable
 
-IMAGE ANALYSIS:
-When user sends an image, analyze it in context of automation services."""
+ANÁLISIS DE IMÁGENES:
+Cuando el usuario envía una imagen, analízala en contexto de servicios de automatización."""
 
     # Construir mensajes con historial
     messages = [{"role": "system", "content": system_prompt}]
