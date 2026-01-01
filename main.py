@@ -220,7 +220,7 @@ SOBRE LOOPERA:
                 "Content-Type": "application/json"
             },
             json={
-                "model": "llama-3.2-90b-vision-preview",
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 500
