@@ -9,4 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# No CMD - Railway usará startCommand de railway.json
+COPY start.sh .
+RUN chmod +x start.sh
+
+CMD ["./start.sh"]
