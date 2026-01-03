@@ -17,7 +17,7 @@ Stack:
 - Framework: FastAPI
 - LLM: Groq (llama-3.3-70b-versatile)
 - STT: Groq Whisper Large v3 Turbo
-- TTS: Google Cloud TTS (es-US-Wavenet-B, latino)
+- TTS: Google Cloud TTS (es-US-Studio-O, latino, voz natural)
 - Vision: Groq Llama 4 Scout
 - Memory: Redis (24h TTL, 20 mensajes)
 
@@ -36,6 +36,7 @@ import tempfile
 import subprocess
 import base64
 import json
+import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -81,6 +82,136 @@ def get_google_tts_client():
         credentials = service_account.Credentials.from_service_account_info(credentials_dict)
         return texttospeech.TextToSpeechClient(credentials=credentials)
     return None
+
+# =============================================================================
+# ACTIVOS DIGITALES DE PROYECTOS
+# =============================================================================
+# URLs reales de imágenes y brochures de Conaltura
+
+PROJECT_ASSETS = {
+    "crista": {
+        "nombre": "Crista",
+        "ciudad": "Medellín - Laureles",
+        "precio": "Desde $729 millones de pesos colombianos",
+        "area": "75-88 m²",
+        "tipo": "imagen",
+        "render": "https://conaltura.com/wp-content/uploads/2025/01/FACHADA-2.jpg",
+        "planta": "https://conaltura.com/wp-content/uploads/2025/01/165-TIPO-A-83.08m2.jpg",
+        "zonas": "https://conaltura.com/wp-content/uploads/2025/01/165-Mesa-de-trabajo-58-copia-17.jpg",
+        "url_proyecto": "https://conaltura.com/producto/crista/"
+    },
+    "foresta": {
+        "nombre": "Foresta",
+        "ciudad": "Envigado - Vía Las Antillas",
+        "precio": "Desde $502 millones de pesos colombianos",
+        "area": "61-75 m²",
+        "tipo": "imagen",
+        "render": "https://conaltura.com/wp-content/uploads/2025/01/8-Mesa-de-trabajo-58-copia-21.jpg",
+        "planta": "https://conaltura.com/wp-content/uploads/2025/01/8-TIPO-A-75.OM2-TORRE-3.jpg",
+        "zonas": "https://conaltura.com/wp-content/uploads/2025/01/8-Mesa-de-trabajo-58-copia-28.jpg",
+        "url_proyecto": "https://conaltura.com/producto/foresta/"
+    },
+    "canarias": {
+        "nombre": "Canarias",
+        "ciudad": "Cajicá",
+        "precio": "Desde $325 millones de pesos colombianos",
+        "area": "65 m²",
+        "tipo": "imagen",
+        "render": "https://conaltura.com/wp-content/uploads/2024/12/FACHADA-1.jpg",
+        "planta": "https://conaltura.com/wp-content/uploads/2024/12/166-TIPO-S-65.48-M2.jpg",
+        "zonas": "https://conaltura.com/wp-content/uploads/2024/12/166-Mesa-de-trabajo-58-copia-20.jpg",
+        "url_proyecto": "https://conaltura.com/producto/canarias/"
+    },
+    "azzuri": {
+        "nombre": "Azzuri",
+        "ciudad": "La Estrella",
+        "precio": "Desde $255 millones de pesos colombianos",
+        "area": "51 m²",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/04/1924-BROCHURE-FINAL_AZZURI-V1-BAJA_compressed.pdf",
+        "url_proyecto": "https://conaltura.com/producto/azzuri/"
+    },
+    "polanco": {
+        "nombre": "Polanco",
+        "ciudad": "Envigado - Av. El Poblado",
+        "precio": "Desde $521 millones de pesos colombianos",
+        "area": "51-110 m²",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/04/1826-BROCHURE-POLANCO_compressed.pdf",
+        "url_proyecto": "https://conaltura.com/producto/polanco/"
+    },
+    "bora": {
+        "nombre": "Bora",
+        "ciudad": "Bello",
+        "precio": "Desde $298 millones de pesos colombianos",
+        "area": "56-63 m²",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/01/13-BROCHURE%20BORA_2024.pdf",
+        "url_proyecto": "https://conaltura.com/producto/bora/"
+    },
+    "campura": {
+        "nombre": "Campura",
+        "ciudad": "Medellín - Robledo",
+        "precio": "Desde $206 millones de pesos colombianos (VIS)",
+        "area": "Variable",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/01/1829-Brochure%20digital%20Campura_nov23%20PDF.pdf",
+        "url_proyecto": "https://conaltura.com/producto/campura/"
+    },
+    "zua": {
+        "nombre": "Zuá",
+        "ciudad": "Zipaquirá",
+        "precio": "Desde $180 millones de pesos colombianos (VIS)",
+        "area": "49-55 m²",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/01/1900-BROCHURE%20DIGITAL%20ZUA%20CORAL.pdf",
+        "url_proyecto": "https://conaltura.com/producto/zua/"
+    },
+    "amara": {
+        "nombre": "Amara",
+        "ciudad": "Cali - Ciudad Paraíso",
+        "precio": "Desde $236 millones de pesos colombianos",
+        "area": "55 m²",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/01/1908-MRCD_BROCHURE%20AMARA%202024.pdf",
+        "url_proyecto": "https://conaltura.com/producto/amara/"
+    },
+    "diporto": {
+        "nombre": "Diporto",
+        "ciudad": "Cartagena - Serena del Mar",
+        "precio": "Desde $748 millones de pesos colombianos",
+        "area": "87-97 m²",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/01/1881-DIPORTO%20BROCHURE.pdf",
+        "url_proyecto": "https://conaltura.com/producto/diporto/"
+    },
+    "coralia": {
+        "nombre": "Coralia",
+        "ciudad": "Cartagena - Serena del Mar",
+        "precio": "Desde $581 millones de pesos colombianos",
+        "area": "73-88 m²",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/01/1873-BROCHURE%20DIGITAL%20CORALIA%20V12-comp..pdf",
+        "url_proyecto": "https://conaltura.com/producto/coralia/"
+    },
+    "torres_del_campo": {
+        "nombre": "Torres del Campo",
+        "ciudad": "Rionegro",
+        "precio": "Desde $434 millones de pesos colombianos",
+        "area": "60-62 m²",
+        "tipo": "documento",
+        "brochure": "https://conaltura.com/wp-content/uploads/2025/01/62-Brochure%20digital%20Torres%20del%20Campo%20nov23_2.pdf",
+        "url_proyecto": "https://conaltura.com/producto/torres-del-campo/"
+    },
+    "meety": {
+        "nombre": "Meety Suites",
+        "ciudad": "Bogotá - Centro Internacional",
+        "precio": "Inversión con 13% rentabilidad",
+        "area": "24-42 m²",
+        "tipo": "link",
+        "url_proyecto": "https://conaltura.com/producto/meety-suites/"
+    }
+}
 
 # =============================================================================
 # REDIS (OPCIONAL)
@@ -284,9 +415,9 @@ async def google_text_to_speech(text: str, language: str = "es") -> bytes:
     Soporta espanol latino (es-US) e ingles (en-US).
     Genera MP3 directamente (no necesita conversion como PlayAI).
 
-    Voces configuradas:
-    - Espanol: es-US-Wavenet-B (femenina, latina)
-    - Ingles: en-US-Wavenet-F (femenina)
+    Voces configuradas (Studio = más natural y cálida):
+    - Espanol: es-US-Studio-O (femenina, latina, natural)
+    - Ingles: en-US-Studio-O (femenina, natural)
 
     Requiere GOOGLE_APPLICATION_CREDENTIALS_JSON en variables de entorno.
     """
@@ -299,17 +430,17 @@ async def google_text_to_speech(text: str, language: str = "es") -> bytes:
         # Configurar el input
         synthesis_input = texttospeech.SynthesisInput(text=text)
 
-        # Seleccionar voz según idioma
+        # Seleccionar voz según idioma - Studio es más natural y cálida
         if language == "es":
             voice = texttospeech.VoiceSelectionParams(
                 language_code="es-US",  # Español latino
-                name="es-US-Wavenet-B",  # Voz femenina natural
+                name="es-US-Studio-O",  # Voz Studio más natural y amigable
                 ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
             )
         else:
             voice = texttospeech.VoiceSelectionParams(
                 language_code="en-US",
-                name="en-US-Wavenet-F",
+                name="en-US-Studio-O",  # Voz Studio en inglés
                 ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
             )
 
@@ -338,14 +469,22 @@ async def chat_completion(user_message: str, history: list = None) -> str:
     if not GROQ_API_KEY:
         return "Bot configurado. Falta GROQ_API_KEY para respuestas inteligentes."
 
-    system_prompt = """Eres "Cami", el Asesor Virtual Inteligente de Conaltura Construcción y Vivienda S.A.S.
+    system_prompt = """Eres "Cami", Asesora Virtual con Inteligencia Artificial de Conaltura Construcción y Vivienda S.A.S.
 
-## IDENTIDAD
+## IDENTIDAD IA (MUY IMPORTANTE)
+- SIEMPRE menciona que eres una asesora con IA/inteligencia artificial en la primera interacción
+- Si preguntan si eres robot/IA, confirma: "Sí, soy Cami, una asesora virtual con inteligencia artificial. Estoy entrenada para ayudarte como lo haría un asesor humano. Si prefieres hablar con una persona, te puedo conectar con gusto."
 - Empresa con +35 años de trayectoria
 - Certificada como Empresa B (B-Corp) - compromiso ético y ambiental
-- Estrategia VIO: Visión, Innovación, Oportunidad en Sostenibilidad
 - Certificaciones EDGE y LEED = ahorro en facturas de servicios
-- +600 colaboradores, +3,000 empleos indirectos
+
+## REGLA DE MONEDA (MUY IMPORTANTE - NUNCA VIOLAR)
+- TODOS los precios son en PESOS COLOMBIANOS (COP)
+- SIEMPRE di "millones de pesos" o "millones de pesos colombianos"
+- NUNCA JAMÁS digas "dólares" - NO existen dólares en este contexto
+- Ejemplo CORRECTO: "desde 255 millones de pesos colombianos"
+- Ejemplo INCORRECTO: "desde 255 millones de dólares"
+- Cuando menciones precios en voz, pronuncia claramente "pesos colombianos"
 
 ## TONO DE VOZ
 - Profesional pero cercano y empático
@@ -363,54 +502,51 @@ async def chat_completion(user_message: str, history: list = None) -> str:
 ## INVENTARIO 2025
 
 ### VIVIENDA VIS (Interés Social - Aplican Subsidios)
-| Proyecto | Ciudad | Desde |
-|----------|--------|-------|
-| Azzuri | La Estrella | $255M |
-| Campura | Medellín | $206M |
+| Proyecto | Ciudad | Desde (Millones COP) |
+|----------|--------|----------------------|
+| Azzuri | La Estrella | $255 millones |
+| Campura | Medellín | $206 millones |
 | Mosaico | Medellín | Tope VIS |
 | Venti | Tocancipá | Tope VIS |
-| Zuá | Bogotá | Tope VIS |
-| Almendro | Fontibón, Bogotá | $150M+ |
-| Amara | Cali | $236M |
+| Zuá | Zipaquirá | $180 millones |
+| Almendro | Fontibón, Bogotá | $150 millones+ |
+| Amara | Cali | $236 millones |
 
 ### VIVIENDA NO VIS (Sin subsidio, mayor área)
-| Proyecto | Ciudad | Área m² | Desde |
-|----------|--------|---------|-------|
-| Bora | Bello | 56-63 | $298M |
-| Catalana | Medellín | 61-77 | $472M |
-| Crista | Medellín | 75-88 | $729M |
-| Foresta | Envigado | 61-75 | $502M (Certificación EDGE) |
-| Polanco | Envigado | 51-110 | $521M |
-| Torres del Campo | Rionegro | 60-62 | $434M |
-| Canarias | Cajicá | 65 | $325M |
+| Proyecto | Ciudad | Área m² | Desde (Millones COP) |
+|----------|--------|---------|----------------------|
+| Bora | Bello | 56-63 | $298 millones |
+| Catalana | Medellín | 61-77 | $472 millones |
+| Crista | Medellín - Laureles | 75-88 | $729 millones |
+| Foresta | Envigado | 61-75 | $502 millones (EDGE) |
+| Polanco | Envigado | 51-110 | $521 millones |
+| Torres del Campo | Rionegro | 60-62 | $434 millones |
+| Canarias | Cajicá | 65 | $325 millones |
 
 ### INVERSIÓN/LUJO (Costa Caribe)
-| Proyecto | Ciudad | Área m² | Desde | Especial |
-|----------|--------|---------|-------|----------|
-| Coralia | Cartagena | 73-88 | $581M | Licencia turística (Airbnb) |
-| Diporto | Cartagena | 87-97 | $748M | Vista al mar, muelle privado |
+| Proyecto | Ciudad | Área m² | Desde (Millones COP) | Especial |
+|----------|--------|---------|----------------------|----------|
+| Coralia | Cartagena | 73-88 | $581 millones | Licencia turística (Airbnb) |
+| Diporto | Cartagena | 87-97 | $748 millones | Vista al mar, muelle privado |
+| Meety Suites | Bogotá Centro | 24-42 | Inversión 13% rentabilidad | Renta hotelera |
 
-## SUBSIDIOS (Solo para VIS)
+## SUBSIDIOS (Solo para VIS) - Montos en PESOS COLOMBIANOS
 
 ### Mi Casa Ya (Nacional)
-- Requisito: Ingresos familiares < 4 SMMLV (~$5.7M)
+- Requisito: Ingresos familiares < 4 SMMLV (~$5.7 millones de pesos)
 - Requiere Sisbén A1 a D20
-- Montos: 20-30 SMMLV ($28M - $42M aprox)
+- Montos: 20-30 SMMLV ($28-42 millones de pesos aprox)
 
 ### Subsidios Regionales (SE PUEDEN SUMAR)
-- Medellín (Isvimed): $13M-$15M adicionales. Requiere 6 años viviendo en Medellín
+- Medellín (Isvimed): $13-15 millones adicionales. Requiere 6 años en Medellín
 - Bogotá: "Mi Casa en Bogotá" 10-30 SMMLV adicionales
 - Barranquilla: "Mi Techo Propio" hasta 30 SMMLV
 - Cali: "Casa Mía" hasta 30 SMMLV. Requiere 5 años en Cali
 
-### Cajas de Compensación
-- Para ingresos < 2 SMMLV
-- Se suma con Mi Casa Ya (Concurrencia) = hasta 50 SMMLV total
-
 ## PROCESO DE COMPRA
 
-1. SEPARACIÓN: Pago en línea (PSE/Wompi). Monto varía según proyecto ($500K - $2M)
-2. VINCULACIÓN FIDUCIARIA: El dinero va a Alianza Fiduciaria (no a Conaltura directo) = SEGURIDAD
+1. SEPARACIÓN: Pago en línea (PSE/Wompi). $500 mil - $2 millones de pesos
+2. VINCULACIÓN FIDUCIARIA: Dinero va a Alianza Fiduciaria = SEGURIDAD
 3. CUOTA INICIAL: 30% del valor, pagado en cuotas durante construcción
 4. CRÉDITO HIPOTECARIO: 70% restante, contra entrega
 
@@ -420,22 +556,34 @@ async def chat_completion(user_message: str, history: list = None) -> str:
 - Divisas deben pasar por Comisionista de Bolsa (no giros directos)
 - Documentos: W9/W8 BEN (USA), carta laboral, extractos bancarios 3 meses
 
+## ACTIVOS VISUALES
+- Si el usuario pide "ver", "fotos", "imágenes", "brochure" de un proyecto, el sistema enviará automáticamente el material
+- Cuando envíes info de un proyecto, menciona: "Te envío el brochure/imágenes para que lo conozcas mejor 🏡"
+- Si no especifica proyecto, pregunta: "¿De qué proyecto te gustaría recibir información visual?"
+- Proyectos con imágenes directas: Crista, Foresta, Canarias
+- Proyectos con brochure PDF: Azzuri, Polanco, Bora, Campura, Zuá, Amara, Diporto, Coralia, Torres del Campo
+
 ## SCRIPTS DE RESPUESTA
 
-### Saludo
-"¡Hola! 👋 Bienvenido a Conaltura. Soy Cami, tu asesora virtual. Llevamos +35 años construyendo hogares sostenibles en Colombia 🏡🌿
+### Saludo (Primera interacción)
+"¡Hola! 👋 Soy Cami, tu asesora virtual con inteligencia artificial de Conaltura.
+
+Estoy aquí para ayudarte a encontrar tu hogar ideal. Llevamos +35 años construyendo hogares sostenibles en Colombia 🏡🌿
 
 ¿Estás buscando vivienda para vivir, para invertir, o nos escribes desde el exterior?"
 
-### Si pregunta por subsidios
-"¡Claro! Aceptamos subsidios Mi Casa Ya en proyectos VIS como Azzuri, Venti y Amara.
+### Si pregunta si es robot/IA
+"Sí, soy Cami, una asesora virtual con inteligencia artificial. Estoy entrenada para ayudarte como lo haría un asesor humano. Si prefieres hablar con una persona, te puedo conectar con gusto. 🤖✨"
 
-Para aplicar, tus ingresos familiares no deben superar $5.7 millones. ¿Cumples con este requisito? Así te asesoro mejor 💰"
+### Si pregunta por subsidios
+"¡Claro! Aceptamos subsidios Mi Casa Ya en proyectos VIS como Azzuri, Zuá y Amara.
+
+Para aplicar, tus ingresos familiares no deben superar 5.7 millones de pesos. ¿Cumples con este requisito? Así te asesoro mejor 💰"
 
 ### Si es inversionista o menciona Airbnb/renta
-"Para inversión te recomiendo Coralia en Cartagena 🏖️ Tiene licencia turística para rentas cortas tipo Airbnb. También Almendro en Bogotá por su cercanía al aeropuerto.
+"Para inversión te recomiendo Coralia en Cartagena 🏖️ Tiene licencia turística para rentas cortas tipo Airbnb. Desde 581 millones de pesos colombianos.
 
-¿Te envío más información de alguno?"
+¿Te envío el brochure con más detalles?"
 
 ### Si escribe desde el exterior
 "¡Excelente! Tenemos plan especial para colombianos en el exterior 🌍
@@ -445,7 +593,7 @@ Solo necesitas un apoderado (familiar/amigo) en Colombia para firmar, pero el in
 ¿Te interesa Medellín, Bogotá o la Costa?"
 
 ### Si pregunta precios específicos
-Usa la tabla de inventario. Si no tienes el dato exacto:
+Usa la tabla de inventario. SIEMPRE menciona que son PESOS COLOMBIANOS.
 "El precio exacto depende del piso y la vista. Te puedo conectar con un asesor para cotización personalizada. ¿Me compartes tu WhatsApp?"
 
 ### Para cerrar/agendar
@@ -454,7 +602,7 @@ Usa la tabla de inventario. Si no tienes el dato exacto:
 También podemos hacer videollamada si estás lejos."
 
 ### Si hay queja o problema
-"Entiendo tu inquietud y lamento el inconveniente. Para darte una solución concreta, por favor escribe a experienciadelcliente@conaltura.com o al formulario PQRS.
+"Entiendo tu inquietud y lamento el inconveniente. Por favor escribe a experienciadelcliente@conaltura.com
 
 ¿Hay algo más en lo que pueda ayudarte?"
 
@@ -466,9 +614,10 @@ También podemos hacer videollamada si estás lejos."
 ## REGLAS ESTRICTAS
 1. NUNCA inventes precios. Si no sabes, da rango o pide conectar con asesor
 2. NUNCA garantices subsidios - dependen del gobierno
-3. SIEMPRE intenta capturar: Nombre, Celular, Ciudad de interés
-4. Si preguntan por garantías: 10 años estructura, 1 año acabados
-5. Portal propietarios: site.conaltura.com/mi-hogar/
+3. SIEMPRE menciona PESOS COLOMBIANOS, NUNCA dólares
+4. SIEMPRE intenta capturar: Nombre, Celular, Ciudad de interés
+5. Si preguntan por garantías: 10 años estructura, 1 año acabados
+6. Portal propietarios: site.conaltura.com/mi-hogar/
 
 ## IDIOMA
 - Solo español colombiano
@@ -659,6 +808,160 @@ async def send_whatsapp_audio(to: str, audio_data: bytes) -> bool:
             return False
 
 
+async def send_whatsapp_image(to: str, image_url: str, caption: str = "") -> bool:
+    """Envía imagen por WhatsApp usando URL pública"""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                WHATSAPP_API_URL,
+                headers={
+                    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "recipient_type": "individual",
+                    "to": to,
+                    "type": "image",
+                    "image": {
+                        "link": image_url,
+                        "caption": caption
+                    }
+                }
+            )
+            if response.status_code == 200:
+                logger.info(f"🖼️ Imagen enviada a {to}")
+                return True
+            logger.error(f"Error enviando imagen: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Error enviando imagen: {e}")
+        return False
+
+
+async def send_whatsapp_document(to: str, document_url: str, filename: str, caption: str = "") -> bool:
+    """Envía documento PDF por WhatsApp"""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                WHATSAPP_API_URL,
+                headers={
+                    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "recipient_type": "individual",
+                    "to": to,
+                    "type": "document",
+                    "document": {
+                        "link": document_url,
+                        "caption": caption,
+                        "filename": filename
+                    }
+                }
+            )
+            if response.status_code == 200:
+                logger.info(f"📄 Documento enviado a {to}")
+                return True
+            logger.error(f"Error enviando documento: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Error enviando documento: {e}")
+        return False
+
+
+def detect_project_request(text: str) -> str | None:
+    """Detecta si el usuario pide info/imágenes de un proyecto específico"""
+    text_lower = text.lower()
+
+    # Palabras que indican solicitud de contenido visual
+    visual_keywords = ['imagen', 'imágenes', 'foto', 'fotos', 'ver', 'muéstrame',
+                       'muestrame', 'enseñame', 'enséñame', 'como se ve', 'cómo se ve',
+                       'render', 'brochure', 'catálogo', 'catalogo', 'información',
+                       'info', 'planta', 'plantas', 'distribución']
+
+    wants_visual = any(keyword in text_lower for keyword in visual_keywords)
+
+    if not wants_visual:
+        return None
+
+    # Mapeo de nombres de proyecto (incluyendo variaciones)
+    project_mappings = {
+        'crista': 'crista',
+        'foresta': 'foresta',
+        'canarias': 'canarias',
+        'azzuri': 'azzuri',
+        'azuri': 'azzuri',
+        'polanco': 'polanco',
+        'bora': 'bora',
+        'campura': 'campura',
+        'zua': 'zua',
+        'zuá': 'zua',
+        'amara': 'amara',
+        'diporto': 'diporto',
+        'coralia': 'coralia',
+        'torres del campo': 'torres_del_campo',
+        'torredelcampo': 'torres_del_campo',
+        'meety': 'meety',
+        'meety suites': 'meety'
+    }
+
+    for name, key in project_mappings.items():
+        if name in text_lower:
+            return key
+
+    # Detectar por ciudad
+    city_mappings = {
+        'cartagena': 'coralia',
+        'serena del mar': 'coralia',
+        'cajica': 'canarias',
+        'cajicá': 'canarias',
+        'la estrella': 'azzuri',
+        'envigado': 'foresta',
+        'laureles': 'crista',
+        'bello': 'bora',
+        'rionegro': 'torres_del_campo',
+        'zipaquira': 'zua',
+        'zipaquirá': 'zua',
+        'cali': 'amara',
+        'robledo': 'campura'
+    }
+
+    for city, project in city_mappings.items():
+        if city in text_lower:
+            return project
+
+    return "general"
+
+
+async def send_project_assets(to: str, project_key: str) -> bool:
+    """Envía los activos visuales de un proyecto"""
+    project = PROJECT_ASSETS.get(project_key)
+    if not project:
+        return False
+
+    if project["tipo"] == "imagen":
+        # Enviar imagen del render
+        caption = f"🏡 {project['nombre']} - {project['ciudad']}\n\n💰 {project['precio']}\n📐 Áreas: {project['area']}\n\n🔗 Más info: {project['url_proyecto']}"
+        await send_whatsapp_image(to, project["render"], caption)
+        return True
+
+    elif project["tipo"] == "documento":
+        # Enviar brochure PDF
+        caption = f"📋 Brochure {project['nombre']} - {project['ciudad']}\n\n💰 {project['precio']}\n📐 Áreas: {project['area']}"
+        filename = f"Brochure_{project['nombre']}_Conaltura.pdf"
+        await send_whatsapp_document(to, project["brochure"], filename, caption)
+        return True
+
+    elif project["tipo"] == "link":
+        # Solo enviar link
+        await send_whatsapp_message(to, f"🏡 Conoce {project['nombre']} aquí:\n{project['url_proyecto']}")
+        return True
+
+    return False
+
+
 async def download_media(media_id: str) -> bytes | None:
     """Descargar archivo multimedia de WhatsApp"""
     async with httpx.AsyncClient() as client:
@@ -816,7 +1119,12 @@ async def process_message(phone: str, message: dict, message_type: str, message_
             await send_whatsapp_message(phone, "No pude procesar ese mensaje. ¿Podrías escribirme?")
             return
 
-        logger.info(f"Mensaje de {phone}: {user_text[:100]}")
+        logger.info(f"💬 Mensaje de {phone}: {user_text[:100]}")
+
+        # Detectar si pide imágenes/info de proyecto específico
+        project_request = detect_project_request(user_text)
+        if project_request:
+            logger.info(f"🏡 Solicitud de proyecto detectada: {project_request}")
 
         # Obtener historial y generar respuesta
         history = await get_conversation_history(phone)
@@ -824,8 +1132,22 @@ async def process_message(phone: str, message: dict, message_type: str, message_
 
         logger.info(f"Respuesta: {response[:100]}")
 
-        # Enviar respuesta
+        # Enviar respuesta de texto
         await send_whatsapp_message(phone, response)
+
+        # Si pidió info de un proyecto específico, enviar activos visuales
+        if project_request and project_request != "general":
+            await asyncio.sleep(1)  # Pequeña pausa para que llegue primero el texto
+            asset_sent = await send_project_assets(phone, project_request)
+            if asset_sent:
+                logger.info(f"📸 Activos enviados para proyecto: {project_request}")
+        elif project_request == "general":
+            # Pidió imagen pero no especificó proyecto
+            await asyncio.sleep(0.5)
+            await send_whatsapp_message(
+                phone,
+                "¿De qué proyecto te gustaría ver imágenes? 📸\n\nTenemos proyectos en:\n• Medellín (Crista, Campura)\n• Envigado (Foresta, Polanco)\n• Cartagena (Coralia, Diporto)\n• Bogotá/Sabana (Canarias, Zuá)\n• Cali (Amara)\n\n¿Cuál te interesa?"
+            )
 
         # Guardar en historial
         history.append({"role": "user", "content": user_text})
