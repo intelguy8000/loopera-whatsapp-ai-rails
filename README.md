@@ -1,17 +1,17 @@
-# Loopera WhatsApp AI Bot
+# Conaltura WhatsApp AI Bot - Cami
 
-Bot de WhatsApp con IA que procesa texto, imagenes y notas de voz. Responde con voz cuando recibe notas de voz.
+Bot de WhatsApp con IA para Conaltura Construcción y Vivienda. Agente virtual "Cami" que asesora sobre proyectos inmobiliarios, subsidios y proceso de compra.
 
 ## Features
 
 | Feature | Tecnologia | Status |
 |---------|------------|--------|
 | Texto -> Texto | Llama 3.3 70B | OK |
-| Voz -> Voz (Ingles) | Whisper + Llama + PlayAI TTS | OK |
-| Voz -> Voz (Espanol) | Whisper + Llama + Google TTS | OK |
+| Voz -> Voz | Whisper + Llama + **ElevenLabs** | OK |
 | Imagenes -> Texto | Llama 4 Scout Vision | OK |
 | Memoria conversacional | Redis (24h) | OK |
-| Bilingue | Espanol + Ingles | OK |
+| Envío de brochures/imágenes | WhatsApp Media API | OK |
+| Asesoría inmobiliaria | SYSTEM_PROMPT especializado | OK |
 
 ## Arquitectura
 
@@ -25,9 +25,16 @@ Usuario -> WhatsApp -> Meta API -> Railway
                                       |
                                       v
                               +---------------+
-                              | Llama 3.3 70B | (respuesta)
+                              | Llama 3.3 70B | (respuesta IA)
                               +---------------+
                                       |
+                                      v
+                              +---------------+
+                              |  ElevenLabs   | (TTS Principal)
+                              | Multilingual  |
+                              +---------------+
+                                      |
+                              (fallback si falla)
                               +-------+-------+
                               |               |
                          (English)       (Spanish)
@@ -37,12 +44,6 @@ Usuario -> WhatsApp -> Meta API -> Railway
                        | PlayAI   |    | Google TTS |
                        | TTS      |    | (es-US)    |
                        +----------+    +------------+
-                              |               |
-                              v               |
-                       +----------+           |
-                       |  ffmpeg  |           |
-                       | WAV->MP3 |           |
-                       +----------+           |
                               |               |
                               +-------+-------+
                                       |
@@ -57,8 +58,9 @@ Usuario -> WhatsApp -> Meta API -> Railway
 - **Hosting:** Railway (Docker)
 - **LLM:** Groq (Llama 3.3 70B Versatile)
 - **STT:** Groq Whisper Large v3 Turbo
-- **TTS Ingles:** Groq PlayAI TTS
-- **TTS Espanol:** Google Cloud Text-to-Speech (es-US Latino)
+- **TTS Principal:** ElevenLabs (eleven_multilingual_v2) - Alta calidad
+- **TTS Fallback ES:** Google Cloud Text-to-Speech (es-US Latino)
+- **TTS Fallback EN:** Groq PlayAI TTS
 - **Vision:** Groq Llama 4 Scout
 - **Audio Processing:** ffmpeg (para convertir WAV->MP3)
 - **Cache/Memory:** Redis
@@ -73,7 +75,8 @@ Usuario -> WhatsApp -> Meta API -> Railway
 | `APP_SECRET` | App Secret de Meta Developers | Si |
 | `PHONE_NUMBER_ID` | ID del numero de WhatsApp (**NO es WABA ID**) | Si |
 | `GROQ_API_KEY` | API Key de Groq | Si |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Service Account JSON de Google Cloud | Si (para TTS espanol) |
+| `ELEVENLABS_API_KEY` | API Key de ElevenLabs para TTS de alta calidad | Si |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Service Account JSON de Google Cloud | Fallback |
 | `REDIS_URL` | URL de Redis (Railway lo provee automatico) | Si |
 
 > **IMPORTANTE:** `PHONE_NUMBER_ID` es el ID del numero, NO el WABA ID.
@@ -141,18 +144,14 @@ RPM = Requests Per Minute, TPD = Tokens Per Day
 ### Texto
 ```
 Usuario envia texto -> Llama genera respuesta -> Envia texto
+(si pide imágenes de proyecto, se envía brochure/render automáticamente)
 ```
 
-### Nota de voz (Ingles)
+### Nota de voz (SIEMPRE responde con voz)
 ```
 Usuario envia voz -> Whisper transcribe -> Llama responde
--> PlayAI TTS genera WAV -> ffmpeg convierte a MP3 -> Envia nota de voz
-```
-
-### Nota de voz (Espanol)
-```
-Usuario envia voz -> Whisper transcribe -> Llama responde
--> Google TTS genera MP3 directo -> Envia nota de voz
+-> ElevenLabs TTS genera MP3 -> Envia nota de voz
+(fallback: Google TTS para español, PlayAI para inglés)
 ```
 
 ### Imagen
@@ -170,10 +169,11 @@ Usuario envia imagen -> Llama 4 Scout analiza -> Envia texto
 
 ## Voces Configuradas
 
-| Idioma | Provider | Voz | Codigo |
-|--------|----------|-----|--------|
-| Espanol Latino | Google Cloud | Wavenet | es-US-Wavenet-B |
-| Ingles | PlayAI (Groq) | Arista | Arista-PlayAI |
+| Prioridad | Provider | Modelo | Uso |
+|-----------|----------|--------|-----|
+| Principal | ElevenLabs | eleven_multilingual_v2 | Español e Inglés (alta calidad) |
+| Fallback ES | Google Cloud | es-US-Studio-O | Español latino |
+| Fallback EN | PlayAI (Groq) | Arista-PlayAI | Inglés |
 
 ## Lecciones Aprendidas
 

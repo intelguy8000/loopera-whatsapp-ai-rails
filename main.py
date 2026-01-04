@@ -66,6 +66,10 @@ PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "949507764911133")  # NO es WABA 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # console.groq.com
 REDIS_URL = os.getenv("REDIS_URL", "")  # Railway lo provee automatico
 
+# ElevenLabs TTS (alta calidad)
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = "b2htR0pMe28pYwCY9gnP"  # Voz seleccionada para Cami
+
 # URL para enviar mensajes - usa Phone Number ID, no WABA ID
 WHATSAPP_API_URL = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
 
@@ -461,6 +465,53 @@ async def google_text_to_speech(text: str, language: str = "es") -> bytes:
 
     except Exception as e:
         logger.error(f"Google TTS error: {e}")
+        return None
+
+
+async def elevenlabs_text_to_speech(text: str) -> bytes | None:
+    """
+    Text-to-Speech usando ElevenLabs (alta calidad).
+    Usa el modelo eleven_multilingual_v2 que soporta español latino.
+    Genera MP3 directamente.
+
+    Requiere ELEVENLABS_API_KEY en variables de entorno.
+    """
+    try:
+        if not ELEVENLABS_API_KEY:
+            logger.warning("ELEVENLABS_API_KEY no configurada")
+            return None
+
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": ELEVENLABS_API_KEY
+        }
+
+        data = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",  # Soporta español latino
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75,
+                "style": 0.5,
+                "use_speaker_boost": True
+            }
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(url, headers=headers, json=data)
+
+            if response.status_code == 200:
+                logger.info(f"🎵 ElevenLabs TTS generado: {len(response.content)} bytes")
+                return response.content  # Ya viene en MP3, no necesita conversión
+            else:
+                logger.error(f"ElevenLabs error: {response.status_code} - {response.text}")
+                return None
+
+    except Exception as e:
+        logger.error(f"ElevenLabs TTS error: {e}")
         return None
 
 
@@ -1064,15 +1115,18 @@ async def process_message(phone: str, message: dict, message_type: str, message_
                     language = detect_language(user_text)
                     logger.info(f"🌐 Idioma detectado: {language}")
 
-                    # 4. SIEMPRE generar audio de respuesta (REGLA INNEGOCIABLE)
-                    audio_response = None
+                    # 4. Generar audio con ElevenLabs (primario, soporta español e inglés)
+                    logger.info("🔊 Generando respuesta de voz con ElevenLabs...")
+                    audio_response = await elevenlabs_text_to_speech(response)
 
-                    if language == "es":
-                        logger.info("🔊 Generando respuesta de voz en español (Google TTS)...")
-                        audio_response = await google_text_to_speech(response, "es")
-                    else:
-                        logger.info("🔊 Generando respuesta de voz en inglés (PlayAI TTS)...")
-                        audio_response = await text_to_speech(response)
+                    # Fallback a Google/PlayAI si ElevenLabs falla
+                    if not audio_response:
+                        if language == "es":
+                            logger.warning("⚠️ ElevenLabs falló, usando Google TTS como fallback...")
+                            audio_response = await google_text_to_speech(response, "es")
+                        else:
+                            logger.warning("⚠️ ElevenLabs falló, usando PlayAI como fallback...")
+                            audio_response = await text_to_speech(response)
 
                     # 5. Enviar audio - OBLIGATORIO para notas de voz
                     if audio_response:
@@ -1083,8 +1137,8 @@ async def process_message(phone: str, message: dict, message_type: str, message_
                             logger.warning("⚠️ Falló envío de audio, intentando texto como fallback...")
                             await send_whatsapp_message(phone, response)
                     else:
-                        # Fallback SOLO si falla el TTS (no debería pasar normalmente)
-                        logger.warning("⚠️ TTS falló, usando fallback de texto")
+                        # Fallback final: texto (solo si TODOS los TTS fallan)
+                        logger.warning("⚠️ Todos los TTS fallaron, enviando texto")
                         await send_whatsapp_message(phone, response)
 
                     # 6. Guardar en historial
@@ -1213,9 +1267,13 @@ async def root():
         "status": "online",
         "service": "Conaltura WhatsApp Bot",
         "agent": "Cami",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "features": ["text", "audio", "vision", "real-estate"],
-        "tts": ["google-es"]
+        "tts": {
+            "primary": "elevenlabs",
+            "fallback_es": "google-cloud",
+            "fallback_en": "groq-playai"
+        }
     }
 
 
