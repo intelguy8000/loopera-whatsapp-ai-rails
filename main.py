@@ -471,20 +471,39 @@ async def chat_completion(user_message: str, history: list = None) -> str:
 
     system_prompt = """Eres "Cami", Asesora Virtual con Inteligencia Artificial de Conaltura Construcción y Vivienda S.A.S.
 
-## IDENTIDAD IA (MUY IMPORTANTE)
-- SIEMPRE menciona que eres una asesora con IA/inteligencia artificial en la primera interacción
-- Si preguntan si eres robot/IA, confirma: "Sí, soy Cami, una asesora virtual con inteligencia artificial. Estoy entrenada para ayudarte como lo haría un asesor humano. Si prefieres hablar con una persona, te puedo conectar con gusto."
+## ⚠️ REGLAS INNEGOCIABLES - NUNCA VIOLAR ⚠️
+
+Estas reglas son OBLIGATORIAS en CADA interacción. No importa el contexto, SIEMPRE se cumplen:
+
+### REGLA 1: SIEMPRE PEDIR EL NOMBRE
+- En el PRIMER mensaje de cualquier conversación, DEBES pedir el nombre del usuario
+- Formato: Responde a su pregunta/saludo + pregunta su nombre
+- Ejemplo: "¡Hola! Qué gusto saludarte 👋 Soy Cami, tu asesora virtual con IA de Conaltura. [respuesta breve a su consulta]. Para atenderte mejor, ¿me compartes tu nombre?"
+- Si ya sabes el nombre (lo mencionaron antes), úsalo: "¡Hola [Nombre]! ¿En qué te puedo ayudar hoy?"
+- NUNCA respondas sin intentar obtener el nombre en la primera interacción
+
+### REGLA 2: VOZ SE RESPONDE CON VOZ
+- Si el usuario envía una NOTA DE VOZ, SIEMPRE debes responder con NOTA DE VOZ
+- El sistema detectará automáticamente las notas de voz y generará audio
+- En tu respuesta, habla de forma natural y conversacional (será convertida a audio)
+- NUNCA respondas con texto largo si recibiste una nota de voz
+
+### REGLA 3: MONEDA EN PESOS COLOMBIANOS
+- TODOS los precios son en PESOS COLOMBIANOS (COP)
+- SIEMPRE di "millones de pesos" o "pesos colombianos"
+- NUNCA JAMÁS digas "dólares" - esta palabra está PROHIBIDA
+- Ejemplo correcto: "desde 255 millones de pesos colombianos"
+
+### REGLA 4: IDENTIDAD DE IA
+- SIEMPRE te presentas como "Cami, asesora virtual con inteligencia artificial de Conaltura"
+- Si preguntan si eres robot/IA, confirmas con naturalidad y ofreces conectar con humano si prefieren
+
+---
+
+## SOBRE CONALTURA
 - Empresa con +35 años de trayectoria
 - Certificada como Empresa B (B-Corp) - compromiso ético y ambiental
 - Certificaciones EDGE y LEED = ahorro en facturas de servicios
-
-## REGLA DE MONEDA (MUY IMPORTANTE - NUNCA VIOLAR)
-- TODOS los precios son en PESOS COLOMBIANOS (COP)
-- SIEMPRE di "millones de pesos" o "millones de pesos colombianos"
-- NUNCA JAMÁS digas "dólares" - NO existen dólares en este contexto
-- Ejemplo CORRECTO: "desde 255 millones de pesos colombianos"
-- Ejemplo INCORRECTO: "desde 255 millones de dólares"
-- Cuando menciones precios en voz, pronuncia claramente "pesos colombianos"
 
 ## TONO DE VOZ
 - Profesional pero cercano y empático
@@ -1022,15 +1041,15 @@ async def process_message(phone: str, message: dict, message_type: str, message_
         if message_type == "text":
             user_text = message.get("text", {}).get("body", "")
         elif message_type == "audio":
-            # Procesar nota de voz con respuesta de voz (si es inglés)
+            # ===== REGLA INNEGOCIABLE: VOZ SE RESPONDE CON VOZ =====
             audio_id = message.get("audio", {}).get("id")
             if audio_id:
-                logger.info(f"Procesando nota de voz {audio_id}")
+                logger.info(f"🎤 Procesando nota de voz de {phone} - SIEMPRE responderemos con voz")
                 audio_bytes = await download_media(audio_id)
                 if audio_bytes:
                     # 1. Transcribir audio
                     user_text = await transcribe_audio(audio_bytes)
-                    logger.info(f"Transcripción: {user_text[:100]}...")
+                    logger.info(f"📝 Transcripción: {user_text[:100]}...")
 
                     if not user_text or user_text.startswith("["):
                         await send_whatsapp_message(phone, "No pude entender tu mensaje de voz. ¿Podrías repetirlo?")
@@ -1039,35 +1058,37 @@ async def process_message(phone: str, message: dict, message_type: str, message_
                     # 2. Generar respuesta
                     history = await get_conversation_history(phone)
                     response = await chat_completion(user_text, history)
-                    logger.info(f"Respuesta: {response[:100]}...")
+                    logger.info(f"💬 Respuesta generada: {response[:100]}...")
 
-                    # 3. Detectar idioma y generar respuesta de voz
+                    # 3. Detectar idioma
                     language = detect_language(user_text)
                     logger.info(f"🌐 Idioma detectado: {language}")
 
+                    # 4. SIEMPRE generar audio de respuesta (REGLA INNEGOCIABLE)
                     audio_response = None
 
                     if language == "es":
-                        # Usar Google TTS para español
                         logger.info("🔊 Generando respuesta de voz en español (Google TTS)...")
                         audio_response = await google_text_to_speech(response, "es")
                     else:
-                        # Usar PlayAI TTS para inglés
                         logger.info("🔊 Generando respuesta de voz en inglés (PlayAI TTS)...")
                         audio_response = await text_to_speech(response)
 
-                    # 4. Enviar audio si se generó correctamente
+                    # 5. Enviar audio - OBLIGATORIO para notas de voz
                     if audio_response:
                         success = await send_whatsapp_audio(phone, audio_response)
-                        if not success:
-                            logger.warning("Falló envío de audio, enviando texto...")
+                        if success:
+                            logger.info(f"✅ Respuesta de voz enviada a {phone}")
+                        else:
+                            logger.warning("⚠️ Falló envío de audio, intentando texto como fallback...")
                             await send_whatsapp_message(phone, response)
                     else:
-                        # Fallback a texto
+                        # Fallback SOLO si falla el TTS (no debería pasar normalmente)
+                        logger.warning("⚠️ TTS falló, usando fallback de texto")
                         await send_whatsapp_message(phone, response)
 
-                    # 5. Guardar en historial
-                    history.append({"role": "user", "content": f"[Audio] {user_text}"})
+                    # 6. Guardar en historial
+                    history.append({"role": "user", "content": f"[Nota de voz] {user_text}"})
                     history.append({"role": "assistant", "content": response})
                     await save_conversation(phone, history)
                     return
