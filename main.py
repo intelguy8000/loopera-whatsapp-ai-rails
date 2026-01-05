@@ -318,14 +318,47 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
 
 
 def detect_language(text: str) -> str:
-    """Detecta si el texto es español o inglés"""
+    """
+    Detecta si el texto es español o inglés.
+    Por defecto asume español (mercado principal: Colombia).
+    Solo detecta inglés si hay palabras claramente inglesas Y no hay españolas.
+    """
     spanish_words = ['hola', 'qué', 'cómo', 'gracias', 'por favor', 'necesito',
                      'quiero', 'buenos', 'buenas', 'está', 'dónde', 'cuándo',
-                     'cuánto', 'puede', 'tienen', 'hacer', 'ayuda', 'información',
-                     'servicio', 'precio', 'cuenta', 'bien', 'mucho', 'para']
+                     'cuánto', 'puede', 'pueden', 'tienen', 'hacer', 'ayuda',
+                     'información', 'info', 'servicio', 'precio', 'precios',
+                     'cuenta', 'bien', 'mucho', 'para', 'apartamento', 'apto',
+                     'casa', 'casas', 'proyecto', 'proyectos', 'subsidio',
+                     'vivienda', 'comprar', 'vender', 'cuotas', 'crédito',
+                     'banco', 'interés', 'ubicación', 'dónde', 'cuándo',
+                     'quisiera', 'me gustaría', 'podrían', 'tienen', 'hay']
+
+    english_words = ['hello', 'hi', 'hey', 'good morning', 'good afternoon',
+                     'please', 'thank you', 'thanks', 'yes', 'no', 'want',
+                     'need', 'looking for', 'interested', 'price', 'how much',
+                     'where', 'when', 'apartment', 'house', 'property',
+                     'available', 'information', 'help', 'could you']
+
     text_lower = text.lower()
     spanish_count = sum(1 for word in spanish_words if word in text_lower)
-    return "es" if spanish_count >= 1 else "en"
+    english_count = sum(1 for word in english_words if word in text_lower)
+
+    # Log para debugging
+    logger.info(f"🌐 detect_language: texto='{text[:50]}...', español={spanish_count}, inglés={english_count}")
+
+    # Si hay cualquier palabra española, es español (mercado principal)
+    if spanish_count > 0:
+        logger.info(f"🌐 Idioma detectado: ESPAÑOL (spanish_count={spanish_count})")
+        return "es"
+
+    # Solo si hay palabras inglesas Y ninguna española, es inglés
+    if english_count > 0:
+        logger.info(f"🌐 Idioma detectado: INGLÉS (english_count={english_count})")
+        return "en"
+
+    # Default: español (Colombia es el mercado principal)
+    logger.info("🌐 Idioma detectado: ESPAÑOL (default)")
+    return "es"
 
 
 def convert_wav_to_mp3(wav_data: bytes) -> bytes | None:
@@ -361,6 +394,55 @@ def convert_wav_to_mp3(wav_data: bytes) -> bytes | None:
     except Exception as e:
         logger.error(f"Error convirtiendo audio: {e}")
         return None
+
+
+def convert_to_whatsapp_ptt(mp3_data: bytes) -> bytes:
+    """
+    Convierte MP3 a OGG Opus Mono 16kHz para WhatsApp PTT (Push-To-Talk).
+
+    Requisitos WhatsApp para nota de voz real (activa sensor proximidad):
+    - Contenedor: OGG
+    - Códec: Opus (NO Vorbis)
+    - Canales: Mono (1) - CRÍTICO para activar auricular
+    - Sample rate: 16kHz
+    - Sin metadata
+    """
+    with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as mp3_file:
+        mp3_file.write(mp3_data)
+        mp3_path = mp3_file.name
+
+    ogg_path = mp3_path.replace('.mp3', '.ogg')
+
+    try:
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', mp3_path,
+            '-c:a', 'libopus',
+            '-b:a', '16k',
+            '-vbr', 'on',
+            '-compression_level', '10',
+            '-application', 'voip',    # Optimizado para voz
+            '-ac', '1',                # MONO - activa sensor proximidad
+            '-ar', '16000',            # 16kHz estándar PTT
+            '-map_metadata', '-1',     # Sin metadata
+            '-vn',                     # Sin video/carátula
+            ogg_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=30)
+
+        if result.returncode != 0:
+            logger.error(f"❌ FFmpeg PTT error: {result.stderr.decode()}")
+            raise Exception(f"FFmpeg failed: {result.stderr.decode()}")
+
+        with open(ogg_path, 'rb') as f:
+            ogg_data = f.read()
+
+        logger.info(f"🎵 PTT: MP3 ({len(mp3_data)} bytes) → OGG Opus Mono ({len(ogg_data)} bytes)")
+        return ogg_data
+
+    finally:
+        Path(mp3_path).unlink(missing_ok=True)
+        Path(ogg_path).unlink(missing_ok=True)
 
 
 async def text_to_speech(text: str, language: str = "en") -> bytes | None:
@@ -490,7 +572,8 @@ async def elevenlabs_text_to_speech(text: str, language: str = "es") -> bytes | 
 
         # Seleccionar voz según idioma
         voice_id = ELEVENLABS_VOICE_ES if language == "es" else ELEVENLABS_VOICE_EN
-        logger.info(f"🎙️ ElevenLabs usando voz: {'Latina (ES)' if language == 'es' else 'Profesional (EN)'}")
+        voice_name = "Latina-ES" if language == "es" else "Profesional-EN"
+        logger.info(f"🎙️ ElevenLabs TTS: idioma={language}, voz={voice_name}, voice_id={voice_id[:8]}...")
 
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
@@ -609,9 +692,23 @@ User: "Hi, I'm interested in apartments in Cartagena"
 
 Cami: "Hi! 👋 I'm Cami from Conaltura. We have beautiful projects in Cartagena, perfect for investment with Airbnb rental license. What's your name?"
 
+**PRECIOS EN INGLÉS (OBLIGATORIO):**
+- SIEMPRE muestra precios en COP + aproximado en USD
+- Formato: "Starting from approximately $581 million COP (~$140,000 USD)"
+- Usa tasa de cambio aproximada: 1 USD = 4,200 COP
+- Agrega disclaimer: "📋 *USD amount is approximate. Final price in Colombian Pesos.*"
+
+**Ejemplos de precios bilingües:**
+| Proyecto | En español | En inglés |
+|----------|------------|-----------|
+| VIS $180M | "desde $180 millones" | "from ~$180M COP (~$43,000 USD)" |
+| No VIS $500M | "desde $500 millones" | "from ~$500M COP (~$119,000 USD)" |
+| Premium $750M | "desde $750 millones" | "from ~$750M COP (~$178,000 USD)" |
+
 **Notas para inglés:**
-- Precios siempre en Colombian Pesos (COP): "starting from approximately $581 million COP"
-- Menciona que aplica para colombianos en el exterior O extranjeros
+- Aplica para colombianos en el exterior O extranjeros
+- Financiación disponible para extranjeros con ciertos bancos
+- Menciona proceso de compra remota si preguntan
 
 ---
 
@@ -940,30 +1037,50 @@ async def send_whatsapp_message(to: str, text: str):
 
 
 async def send_whatsapp_audio(to: str, audio_data: bytes) -> bool:
-    """Enviar nota de voz por WhatsApp"""
+    """
+    Enviar nota de voz PTT real por WhatsApp.
+
+    Convierte MP3 a OGG Opus Mono 16kHz para que WhatsApp lo trate como
+    nota de voz real (activa sensor proximidad, reproduce en auricular).
+    """
     upload_url = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/media"
 
+    try:
+        # 1. Convertir MP3 a OGG Opus Mono para PTT real
+        logger.info(f"🎵 Convirtiendo audio a OGG Opus para PTT...")
+        ogg_data = convert_to_whatsapp_ptt(audio_data)
+    except Exception as e:
+        logger.error(f"❌ Error convirtiendo a OGG: {e}")
+        # Fallback: intentar enviar MP3 original
+        logger.warning("⚠️ Fallback: enviando MP3 original (no será PTT real)")
+        ogg_data = audio_data
+        content_type = "audio/mpeg"
+        filename = "audio.mp3"
+    else:
+        content_type = "audio/ogg"
+        filename = "audio.ogg"
+
     async with httpx.AsyncClient(timeout=60) as client:
-        # 1. Subir audio a Meta
+        # 2. Subir audio a Meta
         response = await client.post(
             upload_url,
             headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
-            data={"messaging_product": "whatsapp", "type": "audio/mpeg"},
-            files={"file": ("audio.mp3", audio_data, "audio/mpeg")}
+            data={"messaging_product": "whatsapp", "type": content_type},
+            files={"file": (filename, ogg_data, content_type)}
         )
 
         if response.status_code != 200:
-            logger.error(f"Audio upload error: {response.text}")
+            logger.error(f"❌ Audio upload error: {response.text}")
             return False
 
         media_id = response.json().get("id")
         if not media_id:
-            logger.error("No media_id in upload response")
+            logger.error("❌ No media_id in upload response")
             return False
 
-        logger.info(f"Audio subido: media_id={media_id}")
+        logger.info(f"✅ Audio {content_type} subido: media_id={media_id}")
 
-        # 2. Enviar mensaje con audio
+        # 3. Enviar mensaje con audio - SIN caption/filename para PTT
         send_response = await client.post(
             WHATSAPP_API_URL,
             headers={
@@ -976,14 +1093,15 @@ async def send_whatsapp_audio(to: str, audio_data: bytes) -> bool:
                 "to": to,
                 "type": "audio",
                 "audio": {"id": media_id}
+                # NO caption, NO filename - fuerza modo PTT
             }
         )
 
         if send_response.status_code == 200:
-            logger.info(f"Nota de voz enviada a {to}")
+            logger.info(f"✅ Nota de voz PTT enviada a {to}")
             return True
         else:
-            logger.error(f"Audio send error: {send_response.text}")
+            logger.error(f"❌ Audio send error: {send_response.text}")
             return False
 
 
@@ -991,6 +1109,17 @@ async def send_whatsapp_image(to: str, image_url: str, caption: str = "") -> boo
     """Envía imagen por WhatsApp usando URL pública"""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
+            # Verificar que la URL sea accesible antes de enviar
+            try:
+                url_check = await client.head(image_url, timeout=10, follow_redirects=True)
+                if url_check.status_code != 200:
+                    logger.error(f"❌ URL de imagen no accesible: {image_url} (status: {url_check.status_code})")
+                    return False
+                logger.info(f"✅ URL verificada: {image_url}")
+            except Exception as url_error:
+                logger.error(f"❌ Error verificando URL de imagen: {url_error}")
+                return False
+
             response = await client.post(
                 WHATSAPP_API_URL,
                 headers={
@@ -1009,12 +1138,14 @@ async def send_whatsapp_image(to: str, image_url: str, caption: str = "") -> boo
                 }
             )
             if response.status_code == 200:
-                logger.info(f"🖼️ Imagen enviada a {to}")
+                logger.info(f"🖼️ Imagen enviada exitosamente a {to}")
                 return True
-            logger.error(f"Error enviando imagen: {response.text}")
-            return False
+            else:
+                error_detail = response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text
+                logger.error(f"❌ Error enviando imagen: status={response.status_code}, detail={error_detail}")
+                return False
     except Exception as e:
-        logger.error(f"Error enviando imagen: {e}")
+        logger.error(f"❌ Excepción enviando imagen: {e}")
         return False
 
 
@@ -1022,6 +1153,17 @@ async def send_whatsapp_document(to: str, document_url: str, filename: str, capt
     """Envía documento PDF por WhatsApp"""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
+            # Verificar que la URL sea accesible antes de enviar
+            try:
+                url_check = await client.head(document_url, timeout=10, follow_redirects=True)
+                if url_check.status_code != 200:
+                    logger.error(f"❌ URL de documento no accesible: {document_url} (status: {url_check.status_code})")
+                    return False
+                logger.info(f"✅ URL de documento verificada: {document_url}")
+            except Exception as url_error:
+                logger.error(f"❌ Error verificando URL de documento: {url_error}")
+                return False
+
             response = await client.post(
                 WHATSAPP_API_URL,
                 headers={
@@ -1041,12 +1183,14 @@ async def send_whatsapp_document(to: str, document_url: str, filename: str, capt
                 }
             )
             if response.status_code == 200:
-                logger.info(f"📄 Documento enviado a {to}")
+                logger.info(f"📄 Documento enviado exitosamente a {to}")
                 return True
-            logger.error(f"Error enviando documento: {response.text}")
-            return False
+            else:
+                error_detail = response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text
+                logger.error(f"❌ Error enviando documento: status={response.status_code}, detail={error_detail}")
+                return False
     except Exception as e:
-        logger.error(f"Error enviando documento: {e}")
+        logger.error(f"❌ Excepción enviando documento: {e}")
         return False
 
 
@@ -1116,28 +1260,47 @@ def detect_project_request(text: str) -> str | None:
 
 async def send_project_assets(to: str, project_key: str) -> bool:
     """Envía los activos visuales de un proyecto"""
+    logger.info(f"📸 Intentando enviar assets de proyecto: {project_key}")
+
     project = PROJECT_ASSETS.get(project_key)
     if not project:
+        logger.warning(f"⚠️ Proyecto no encontrado en PROJECT_ASSETS: {project_key}")
         return False
+
+    logger.info(f"📸 Proyecto encontrado: {project['nombre']} ({project['tipo']})")
 
     if project["tipo"] == "imagen":
         # Enviar imagen del render
+        render_url = project["render"]
+        logger.info(f"🖼️ Enviando imagen: {render_url}")
         caption = f"🏡 {project['nombre']} - {project['ciudad']}\n\n💰 {project['precio']}\n📐 Áreas: {project['area']}\n\n🔗 Más info: {project['url_proyecto']}"
-        await send_whatsapp_image(to, project["render"], caption)
-        return True
+        success = await send_whatsapp_image(to, render_url, caption)
+        if success:
+            logger.info(f"✅ Imagen enviada exitosamente para {project_key}")
+        else:
+            logger.error(f"❌ Falló envío de imagen para {project_key}")
+        return success
 
     elif project["tipo"] == "documento":
         # Enviar brochure PDF
+        brochure_url = project["brochure"]
+        logger.info(f"📄 Enviando brochure: {brochure_url}")
         caption = f"📋 Brochure {project['nombre']} - {project['ciudad']}\n\n💰 {project['precio']}\n📐 Áreas: {project['area']}"
         filename = f"Brochure_{project['nombre']}_Conaltura.pdf"
-        await send_whatsapp_document(to, project["brochure"], filename, caption)
-        return True
+        success = await send_whatsapp_document(to, brochure_url, filename, caption)
+        if success:
+            logger.info(f"✅ Brochure enviado exitosamente para {project_key}")
+        else:
+            logger.error(f"❌ Falló envío de brochure para {project_key}")
+        return success
 
     elif project["tipo"] == "link":
         # Solo enviar link
+        logger.info(f"🔗 Enviando solo link para {project_key}")
         await send_whatsapp_message(to, f"🏡 Conoce {project['nombre']} aquí:\n{project['url_proyecto']}")
         return True
 
+    logger.warning(f"⚠️ Tipo de proyecto desconocido: {project['tipo']}")
     return False
 
 
