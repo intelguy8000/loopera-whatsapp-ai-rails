@@ -169,11 +169,17 @@ Usuario envia imagen -> Llama 4 Scout analiza -> Envia texto
 
 ## Voces Configuradas
 
-| Prioridad | Provider | Modelo | Uso |
-|-----------|----------|--------|-----|
-| Principal | ElevenLabs | eleven_multilingual_v2 | Español e Inglés (alta calidad) |
-| Fallback ES | Google Cloud | es-US-Studio-O | Español latino |
-| Fallback EN | PlayAI (Groq) | Arista-PlayAI | Inglés |
+### ElevenLabs (Principal)
+| Idioma | Voice ID | Descripción |
+|--------|----------|-------------|
+| Español | `b2htR0pMe28pYwCY9gnP` | Voz latina femenina |
+| Inglés | `1SM7GgM6IMuvQlz2BwM3` | Voz profesional femenina |
+
+### Google Cloud TTS (Fallback)
+| Idioma | Voz | Descripción |
+|--------|-----|-------------|
+| Español | es-US-Wavenet-D | Wavenet latina femenina |
+| Inglés | en-US-Wavenet-D | Wavenet femenina |
 
 ## Lecciones Aprendidas
 

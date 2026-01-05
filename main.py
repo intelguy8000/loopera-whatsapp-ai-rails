@@ -68,7 +68,8 @@ REDIS_URL = os.getenv("REDIS_URL", "")  # Railway lo provee automatico
 
 # ElevenLabs TTS (alta calidad)
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = "b2htR0pMe28pYwCY9gnP"  # Voz seleccionada para Cami
+ELEVENLABS_VOICE_ES = "b2htR0pMe28pYwCY9gnP"  # Voz latina para español
+ELEVENLABS_VOICE_EN = "1SM7GgM6IMuvQlz2BwM3"  # Voz profesional para inglés
 
 # URL para enviar mensajes - usa Phone Number ID, no WABA ID
 WHATSAPP_API_URL = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
@@ -470,11 +471,15 @@ async def google_text_to_speech(text: str, language: str = "es") -> bytes:
         return None
 
 
-async def elevenlabs_text_to_speech(text: str) -> bytes | None:
+async def elevenlabs_text_to_speech(text: str, language: str = "es") -> bytes | None:
     """
     Text-to-Speech usando ElevenLabs (alta calidad).
-    Usa el modelo eleven_multilingual_v2 que soporta español latino.
+    Usa el modelo eleven_multilingual_v2 con voz según idioma.
     Genera MP3 directamente.
+
+    Voces:
+    - Español: ELEVENLABS_VOICE_ES (latina femenina)
+    - Inglés: ELEVENLABS_VOICE_EN (profesional femenina)
 
     Requiere ELEVENLABS_API_KEY en variables de entorno.
     """
@@ -483,7 +488,11 @@ async def elevenlabs_text_to_speech(text: str) -> bytes | None:
             logger.warning("ELEVENLABS_API_KEY no configurada")
             return None
 
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+        # Seleccionar voz según idioma
+        voice_id = ELEVENLABS_VOICE_ES if language == "es" else ELEVENLABS_VOICE_EN
+        logger.info(f"🎙️ ElevenLabs usando voz: {'Latina (ES)' if language == 'es' else 'Profesional (EN)'}")
+
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
         headers = {
             "Accept": "audio/mpeg",
@@ -493,7 +502,7 @@ async def elevenlabs_text_to_speech(text: str) -> bytes | None:
 
         data = {
             "text": text,
-            "model_id": "eleven_multilingual_v2",  # Soporta español latino
+            "model_id": "eleven_multilingual_v2",
             "voice_settings": {
                 "stability": 0.5,
                 "similarity_boost": 0.75,
@@ -506,7 +515,7 @@ async def elevenlabs_text_to_speech(text: str) -> bytes | None:
             response = await client.post(url, headers=headers, json=data)
 
             if response.status_code == 200:
-                logger.info(f"🎵 ElevenLabs TTS generado: {len(response.content)} bytes")
+                logger.info(f"🎵 ElevenLabs TTS generado: {len(response.content)} bytes ({language.upper()})")
                 return response.content  # Ya viene en MP3, no necesita conversión
             else:
                 logger.error(f"ElevenLabs error: {response.status_code} - {response.text}")
@@ -1117,18 +1126,14 @@ async def process_message(phone: str, message: dict, message_type: str, message_
                     language = detect_language(user_text)
                     logger.info(f"🌐 Idioma detectado: {language}")
 
-                    # 4. Generar audio con ElevenLabs (primario, soporta español e inglés)
-                    logger.info("🔊 Generando respuesta de voz con ElevenLabs...")
-                    audio_response = await elevenlabs_text_to_speech(response)
+                    # 4. Generar audio con ElevenLabs (voz según idioma detectado)
+                    logger.info(f"🔊 Generando respuesta de voz con ElevenLabs ({language})...")
+                    audio_response = await elevenlabs_text_to_speech(response, language)
 
-                    # Fallback a Google/PlayAI si ElevenLabs falla
+                    # Fallback a Google TTS si ElevenLabs falla
                     if not audio_response:
-                        if language == "es":
-                            logger.warning("⚠️ ElevenLabs falló, usando Google TTS como fallback...")
-                            audio_response = await google_text_to_speech(response, "es")
-                        else:
-                            logger.warning("⚠️ ElevenLabs falló, usando PlayAI como fallback...")
-                            audio_response = await text_to_speech(response)
+                        logger.warning("⚠️ ElevenLabs falló, usando Google TTS como fallback...")
+                        audio_response = await google_text_to_speech(response, language)
 
                     # 5. Enviar audio - OBLIGATORIO para notas de voz
                     if audio_response:
