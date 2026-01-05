@@ -17,7 +17,7 @@ Stack:
 - Framework: FastAPI
 - LLM: Groq (llama-3.3-70b-versatile)
 - STT: Groq Whisper Large v3 Turbo
-- TTS: Google Cloud TTS (es-US-Studio-O, latino, voz natural)
+- TTS: Google Cloud TTS (es-US-Wavenet-D, latino, fallback)
 - Vision: Groq Llama 4 Scout
 - Memory: Redis (24h TTL, 20 mensajes)
 
@@ -415,13 +415,13 @@ async def text_to_speech(text: str, language: str = "en") -> bytes | None:
 
 async def google_text_to_speech(text: str, language: str = "es") -> bytes:
     """
-    Text-to-Speech usando Google Cloud TTS.
+    Text-to-Speech usando Google Cloud TTS (fallback si ElevenLabs falla).
     Soporta espanol latino (es-US) e ingles (en-US).
-    Genera MP3 directamente (no necesita conversion como PlayAI).
+    Genera MP3 directamente.
 
-    Voces configuradas (Studio = más natural y cálida):
-    - Espanol: es-US-Studio-O (femenina, latina, natural)
-    - Ingles: en-US-Studio-O (femenina, natural)
+    Voces configuradas (Wavenet):
+    - Espanol: es-US-Wavenet-D (femenina, latina)
+    - Ingles: en-US-Wavenet-D (femenina)
 
     Requiere GOOGLE_APPLICATION_CREDENTIALS_JSON en variables de entorno.
     """
@@ -434,17 +434,19 @@ async def google_text_to_speech(text: str, language: str = "es") -> bytes:
         # Configurar el input
         synthesis_input = texttospeech.SynthesisInput(text=text)
 
-        # Seleccionar voz según idioma - Studio es más natural y cálida
+        # Seleccionar voz según idioma
         if language == "es":
+            logger.info("🔊 Usando Google TTS con voz: es-US-Wavenet-D")
             voice = texttospeech.VoiceSelectionParams(
                 language_code="es-US",  # Español latino
-                name="es-US-Studio-O",  # Voz Studio más natural y amigable
+                name="es-US-Wavenet-D",  # Voz Wavenet femenina
                 ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
             )
         else:
+            logger.info("🔊 Usando Google TTS con voz: en-US-Wavenet-D")
             voice = texttospeech.VoiceSelectionParams(
                 language_code="en-US",
-                name="en-US-Studio-O",  # Voz Studio en inglés
+                name="en-US-Wavenet-D",  # Voz Wavenet en inglés
                 ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
             )
 
