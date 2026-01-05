@@ -610,6 +610,45 @@ async def elevenlabs_text_to_speech(text: str, language: str = "es") -> bytes | 
         return None
 
 
+async def generate_voice_response(text: str, language: str = "es") -> bytes | None:
+    """
+    Genera audio con fallback automático: ElevenLabs → Google TTS.
+
+    Args:
+        text: Texto a convertir en voz
+        language: Idioma ("es" o "en")
+
+    Returns:
+        bytes: Audio en formato MP3, o None si todos los proveedores fallan
+    """
+    # Intentar ElevenLabs primero (mejor calidad)
+    try:
+        audio_data = await elevenlabs_text_to_speech(text, language)
+        if audio_data:
+            logger.info(f"✅ TTS: ElevenLabs ({language}) - {len(audio_data)} bytes")
+            return audio_data
+        else:
+            logger.warning(f"⚠️ ElevenLabs retornó None - usando Google TTS como fallback...")
+            raise Exception("ElevenLabs returned None")
+
+    except Exception as e:
+        logger.warning(f"⚠️ ElevenLabs falló: {e} - usando Google TTS como fallback...")
+
+        # Fallback a Google TTS
+        try:
+            audio_data = await google_text_to_speech(text, language)
+            if audio_data:
+                logger.info(f"✅ TTS: Google fallback ({language}) - {len(audio_data)} bytes")
+                return audio_data
+            else:
+                logger.error("❌ Google TTS retornó None")
+                return None
+
+        except Exception as google_error:
+            logger.error(f"❌ Google TTS también falló: {google_error}")
+            return None
+
+
 async def cerebras_chat_completion(messages: list, max_tokens: int = 500) -> str:
     """
     Fallback LLM usando Cerebras cuando Groq tiene rate limit.
@@ -1489,14 +1528,9 @@ async def process_message(phone: str, message: dict, message_type: str, message_
                     response = await chat_completion(user_text, history, language=language)
                     logger.info(f"💬 Respuesta generada ({language}): {response[:100]}...")
 
-                    # 4. Generar audio con ElevenLabs (voz según idioma detectado)
-                    logger.info(f"🔊 Generando respuesta de voz con ElevenLabs ({language})...")
-                    audio_response = await elevenlabs_text_to_speech(response, language)
-
-                    # Fallback a Google TTS si ElevenLabs falla
-                    if not audio_response:
-                        logger.warning("⚠️ ElevenLabs falló, usando Google TTS como fallback...")
-                        audio_response = await google_text_to_speech(response, language)
+                    # 4. Generar audio (ElevenLabs con fallback a Google TTS)
+                    logger.info(f"🔊 Generando respuesta de voz ({language})...")
+                    audio_response = await generate_voice_response(response, language)
 
                     # 5. Enviar audio - OBLIGATORIO para notas de voz
                     if audio_response:
@@ -1623,6 +1657,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"🔧 LLM Config: Groq (primary) + Cerebras (fallback)")
     logger.info(f"   Groq API Key: {'✅ Configurada' if GROQ_API_KEY else '❌ No configurada'}")
     logger.info(f"   Cerebras API Key: {'✅ Configurada' if CEREBRAS_API_KEY else '❌ No configurada'}")
+    logger.info(f"🔧 TTS Config: ElevenLabs (primary) + Google (fallback)")
+    logger.info(f"   ElevenLabs API Key: {'✅ Configurada' if ELEVENLABS_API_KEY else '❌ No configurada'}")
+    google_tts_configured = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
+    logger.info(f"   Google TTS: {'✅ Configurada' if google_tts_configured else '❌ No configurada'}")
     logger.info(f"Vision habilitado: {'Si' if GROQ_API_KEY else 'No'}")
     yield
     logger.info("Cerrando bot...")
