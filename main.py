@@ -609,10 +609,35 @@ async def elevenlabs_text_to_speech(text: str, language: str = "es") -> bytes | 
         return None
 
 
-async def chat_completion(user_message: str, history: list = None) -> str:
-    """Generar respuesta con Groq LLM"""
+async def chat_completion(user_message: str, history: list = None, language: str = "es") -> str:
+    """
+    Generar respuesta con Groq LLM.
+
+    Args:
+        user_message: Mensaje del usuario
+        history: Historial de conversación
+        language: Idioma detectado del usuario ("es" o "en")
+    """
     if not GROQ_API_KEY:
         return "Bot configurado. Falta GROQ_API_KEY para respuestas inteligentes."
+
+    # Instrucción de idioma para forzar respuesta en el idioma correcto
+    language_instruction = ""
+    if language == "en":
+        language_instruction = """
+
+---
+
+# ⚠️ LANGUAGE OVERRIDE - RESPOND IN ENGLISH
+
+**The user is communicating in ENGLISH. You MUST:**
+1. Respond ENTIRELY in English (not Spanish)
+2. Show prices in BOTH COP and USD: "from ~$500M COP (~$119,000 USD)"
+3. Add disclaimer: "📋 *USD is approximate. Final price in Colombian Pesos.*"
+4. Use English greetings: "Hi!", "Hello!", "Great question!"
+5. Maintain warm, professional tone in English
+
+**DO NOT respond in Spanish. This is a hard requirement.**"""
 
     system_prompt = """# IDENTIDAD
 
@@ -897,7 +922,12 @@ Si preguntan "¿Eres un robot?" o "¿Eres IA?":
 ❌ **Oversharing:** Muros de texto (máx 60 palabras)
 ❌ **Know-It-All Ignorante:** Inventar datos - siempre escala a asesor"""
 
-    messages = [{"role": "system", "content": system_prompt}]
+    # Agregar instrucción de idioma al final del system prompt
+    full_system_prompt = system_prompt + language_instruction
+
+    logger.info(f"🤖 chat_completion: idioma={language}, instrucción_idioma={'SÍ' if language == 'en' else 'NO'}")
+
+    messages = [{"role": "system", "content": full_system_prompt}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
@@ -1378,14 +1408,14 @@ async def process_message(phone: str, message: dict, message_type: str, message_
                         await send_whatsapp_message(phone, "No pude entender tu mensaje de voz. ¿Podrías repetirlo?")
                         return
 
-                    # 2. Generar respuesta
-                    history = await get_conversation_history(phone)
-                    response = await chat_completion(user_text, history)
-                    logger.info(f"💬 Respuesta generada: {response[:100]}...")
-
-                    # 3. Detectar idioma
+                    # 2. Detectar idioma ANTES de generar respuesta
                     language = detect_language(user_text)
-                    logger.info(f"🌐 Idioma detectado: {language}")
+                    logger.info(f"🌐 Idioma detectado ANTES del LLM: {language}")
+
+                    # 3. Generar respuesta (pasando idioma para que responda en el idioma correcto)
+                    history = await get_conversation_history(phone)
+                    response = await chat_completion(user_text, history, language=language)
+                    logger.info(f"💬 Respuesta generada ({language}): {response[:100]}...")
 
                     # 4. Generar audio con ElevenLabs (voz según idioma detectado)
                     logger.info(f"🔊 Generando respuesta de voz con ElevenLabs ({language})...")
@@ -1464,16 +1494,20 @@ async def process_message(phone: str, message: dict, message_type: str, message_
 
         logger.info(f"💬 Mensaje de {phone}: {user_text[:100]}")
 
+        # Detectar idioma ANTES de generar respuesta
+        language = detect_language(user_text)
+        logger.info(f"🌐 Idioma detectado ANTES del LLM: {language}")
+
         # Detectar si pide imágenes/info de proyecto específico
         project_request = detect_project_request(user_text)
         if project_request:
             logger.info(f"🏡 Solicitud de proyecto detectada: {project_request}")
 
-        # Obtener historial y generar respuesta
+        # Obtener historial y generar respuesta (pasando idioma)
         history = await get_conversation_history(phone)
-        response = await chat_completion(user_text, history)
+        response = await chat_completion(user_text, history, language=language)
 
-        logger.info(f"Respuesta: {response[:100]}")
+        logger.info(f"💬 Respuesta ({language}): {response[:100]}")
 
         # Enviar respuesta de texto
         await send_whatsapp_message(phone, response)
