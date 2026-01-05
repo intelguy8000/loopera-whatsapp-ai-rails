@@ -64,6 +64,7 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")  # System User token (permanent
 APP_SECRET = os.getenv("APP_SECRET", "")  # Para validar firmas de webhook
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "949507764911133")  # NO es WABA ID
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # console.groq.com
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")  # Fallback LLM cuando Groq tiene rate limit
 REDIS_URL = os.getenv("REDIS_URL", "")  # Railway lo provee automatico
 
 # ElevenLabs TTS (alta calidad)
@@ -609,6 +610,42 @@ async def elevenlabs_text_to_speech(text: str, language: str = "es") -> bytes | 
         return None
 
 
+async def cerebras_chat_completion(messages: list, max_tokens: int = 500) -> str:
+    """
+    Fallback LLM usando Cerebras cuando Groq tiene rate limit.
+
+    Cerebras usa el mismo modelo llama-3.3-70b pero con diferentes límites.
+    API docs: https://inference-docs.cerebras.ai/
+    """
+    if not CEREBRAS_API_KEY:
+        raise Exception("CEREBRAS_API_KEY no configurada")
+
+    url = "https://api.cerebras.ai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {CEREBRAS_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "llama-3.3-70b",
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.7
+    }
+
+    logger.info("🧠 Intentando Cerebras como fallback LLM...")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(url, headers=headers, json=payload)
+
+        if response.status_code != 200:
+            logger.error(f"❌ Cerebras error: {response.status_code} - {response.text}")
+            raise Exception(f"Cerebras API error: {response.status_code}")
+
+        result = response.json()["choices"][0]["message"]["content"]
+        logger.info(f"✅ Cerebras respuesta generada ({len(result)} chars)")
+        return result
+
+
 async def chat_completion(user_message: str, history: list = None, language: str = "es") -> str:
     """
     Generar respuesta con Groq LLM.
@@ -932,27 +969,62 @@ Si preguntan "¿Eres un robot?" o "¿Eres IA?":
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 500
-            },
-            timeout=30
-        )
+    # Intentar Groq primero, con fallback a Cerebras si hay rate limit
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 500
+                },
+                timeout=30
+            )
 
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
+            if response.status_code == 200:
+                result = response.json()["choices"][0]["message"]["content"]
+                logger.info(f"✅ Groq respuesta generada ({len(result)} chars)")
+                return result
+            elif response.status_code == 429:
+                # Rate limit - intentar Cerebras
+                logger.warning(f"⚠️ Groq rate limit (429) - usando Cerebras como fallback...")
+                raise Exception("rate_limit_exceeded")
+            else:
+                logger.error(f"❌ Groq LLM error: {response.status_code} - {response.text}")
+                raise Exception(f"groq_error_{response.status_code}")
+
+    except Exception as e:
+        error_msg = str(e).lower()
+
+        # Si es rate limit o error de Groq, intentar Cerebras
+        if "rate_limit" in error_msg or "429" in error_msg or "groq_error" in error_msg:
+            logger.warning(f"⚠️ Groq falló ({e}) - intentando Cerebras como fallback...")
+
+            try:
+                result = await cerebras_chat_completion(messages)
+                logger.info(f"✅ Cerebras fallback exitoso")
+                return result
+
+            except Exception as cerebras_error:
+                logger.error(f"❌ Cerebras también falló: {cerebras_error}")
+                # Mensaje de error amigable al usuario
+                if language == "en":
+                    return "I'm experiencing high demand right now. Please try again in a few minutes. 🙏"
+                else:
+                    return "Estoy experimentando alta demanda en este momento. Por favor intenta de nuevo en unos minutos. 🙏"
+
+        # Si es otro tipo de error (timeout, conexión, etc.)
+        logger.error(f"❌ Error LLM inesperado: {e}")
+        if language == "en":
+            return "Sorry, I had a technical issue. Could you please try again?"
         else:
-            logger.error(f"Groq LLM error: {response.text}")
-            return "Disculpa, tuve un problema. ¿Podrías repetir?"
+            return "Disculpa, tuve un problema técnico. ¿Podrías intentar de nuevo?"
 
 
 async def analyze_image(image_base64: str, media_type: str, caption: str, history: list = None) -> str:
@@ -1548,7 +1620,9 @@ async def lifespan(app: FastAPI):
     logger.info("Iniciando Loopera WhatsApp Bot...")
     await init_redis()
     logger.info(f"Phone Number ID: {PHONE_NUMBER_ID}")
-    logger.info(f"Groq configurado: {'Si' if GROQ_API_KEY else 'No'}")
+    logger.info(f"🔧 LLM Config: Groq (primary) + Cerebras (fallback)")
+    logger.info(f"   Groq API Key: {'✅ Configurada' if GROQ_API_KEY else '❌ No configurada'}")
+    logger.info(f"   Cerebras API Key: {'✅ Configurada' if CEREBRAS_API_KEY else '❌ No configurada'}")
     logger.info(f"Vision habilitado: {'Si' if GROQ_API_KEY else 'No'}")
     yield
     logger.info("Cerrando bot...")
